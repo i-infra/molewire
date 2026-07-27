@@ -1,0 +1,24 @@
+#ifndef WIFI_CONFIG_H
+#define WIFI_CONFIG_H
+
+/*
+ * Copy this file to wifi_config.h and edit in your Wi-Fi network. These are the
+ * compile-time default credentials; wifi_config.h is gitignored so real
+ * credentials are not committed.
+ *
+ * Leaving the SSID/password blank is fine: the image then comes up unprovisioned
+ * and is configured at runtime over the management console (see README.adoc).
+ */
+
+#define WIFI_SSID ""
+#define WIFI_PASSWORD ""
+
+/*
+ * 2-letter country code for the radio. Examples:
+ *   CYW43_COUNTRY_USA, CYW43_COUNTRY_UK, CYW43_COUNTRY_CANADA,
+ *   CYW43_COUNTRY_AUSTRALIA, CYW43_COUNTRY_GERMANY, CYW43_COUNTRY_JAPAN
+ * CYW43_COUNTRY_WORLDWIDE is a safe default (slightly lower TX power / fewer channels).
+ */
+#define WIFI_COUNTRY CYW43_COUNTRY_WORLDWIDE
+
+#endif /* WIFI_CONFIG_H */

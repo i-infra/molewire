@@ -1,0 +1,169 @@
+// CDC-ACM management console. See serial_console.h.
+
+#include <stdarg.h>
+#include <stdio.h>
+#include <string.h>
+
+#include <pico/cyw43_arch.h> // lwIP lock for the protocol's lwIP/config reads
+#include <tusb.h>
+
+#include "config.h"
+#include "config_proto.h"
+#include "serial_console.h"
+
+// The CDC-ACM management console is the only CDC-ACM instance (the network
+// class is a separate USB function), so it is always CDC index 0.
+#define CONSOLE_ITF 0
+
+static config_t *g_cfg;
+static char line_buf[192];
+static uint16_t line_len;
+static bool was_connected; // DTR edge: greet once when a terminal attaches
+
+// --- output -------------------------------------------------------------------
+
+// Push raw bytes into the CDC TX FIFO, flushing to make room. A console reply is
+// short and a terminal drains it promptly; if it still will not fit after a few
+// flushes the surplus is dropped rather than block the main loop.
+static void console_put(const char *buf, size_t len) {
+  size_t off = 0;
+  for (int tries = 0; off < len && tries < 16; tries++) {
+    uint32_t w = tud_cdc_n_write(CONSOLE_ITF, buf + off, (uint32_t)(len - off));
+    off += w;
+    tud_cdc_n_write_flush(CONSOLE_ITF);
+  }
+}
+
+// Emit a string to the console, expanding bare LF to CRLF so a raw serial
+// terminal (picocom, screen) renders one line per line instead of stair-
+// stepping. The protocol itself uses '\n' line endings.
+static void console_emit(const char *s) {
+  if (!tud_cdc_n_connected(CONSOLE_ITF)) {
+    return;
+  }
+  char out[256];
+  size_t n = 0;
+  for (const char *p = s; *p; p++) {
+    if (n >= sizeof(out) - 2) { // keep room for a possible CRLF pair
+      console_put(out, n);
+      n = 0;
+    }
+    if (*p == '\n') {
+      out[n++] = '\r';
+    }
+    out[n++] = *p;
+  }
+  if (n) {
+    console_put(out, n);
+  }
+}
+
+static void console_io_write(void *ctx, const char *s) {
+  (void)ctx;
+  console_emit(s);
+}
+
+// The interactive prompt, shown after each reply so the user has a cursor. The
+// protocol chooses it (main vs scan menu), and returns "" to suppress it while a
+// scan is running -- the prompt then reappears with the results.
+static void console_prompt(void) {
+  console_emit(config_proto_prompt());
+}
+
+void serial_console_print(const char *s) {
+  console_emit(s);
+}
+
+void serial_console_printf(const char *fmt, ...) {
+  char buf[200];
+  va_list ap;
+  va_start(ap, fmt);
+  vsnprintf(buf, sizeof(buf), fmt, ap);
+  va_end(ap);
+  console_emit(buf);
+}
+
+// --- task ---------------------------------------------------------------------
+
+void serial_console_init(config_t *cfg) {
+  g_cfg = cfg;
+  line_len = 0;
+  was_connected = false;
+}
+
+void serial_console_task(void) {
+  // Greet a terminal on the rising edge of the connection (DTR asserted).
+  bool connected = tud_cdc_n_connected(CONSOLE_ITF);
+  if (connected && !was_connected) {
+    cfg_io_t io = {.write = console_io_write, .ctx = NULL};
+    config_proto_reset(); // a fresh terminal starts at the main menu
+    cyw43_arch_lwip_begin(); // reads cyw43/lwIP link state
+    config_proto_dump(&io, g_cfg);
+    cyw43_arch_lwip_end();
+    console_prompt();
+    line_len = 0;
+  } else if (!connected && was_connected) {
+    // Terminal dropped: leave any scan/live mode so the device resumes normal
+    // operation (and re-associates) without waiting for a key that cannot come.
+    config_proto_reset();
+  }
+  was_connected = connected;
+
+  // Drive a pending network scan: when it finishes, the protocol prints the
+  // results and a new prompt. Runs under the lwIP lock like the command path,
+  // but only while a scan is actually in flight -- otherwise the bridging hot
+  // path takes no extra lock.
+  if (connected && config_proto_scanning()) {
+    cfg_io_t io = {.write = console_io_write, .ctx = NULL};
+    cyw43_arch_lwip_begin();
+    config_proto_poll(&io, g_cfg);
+    cyw43_arch_lwip_end();
+  }
+
+  // Live (continuous) scan: any keypress stops it and returns to the scan
+  // submenu. Consume the raw input here rather than letting it edit a line.
+  if (config_proto_contscan_active()) {
+    if (tud_cdc_n_available(CONSOLE_ITF)) {
+      uint8_t scratch[64];
+      while (tud_cdc_n_available(CONSOLE_ITF)) {
+        tud_cdc_n_read(CONSOLE_ITF, scratch, sizeof(scratch));
+      }
+      cfg_io_t io = {.write = console_io_write, .ctx = NULL};
+      cyw43_arch_lwip_begin();
+      config_proto_contscan_stop(&io, g_cfg);
+      cyw43_arch_lwip_end();
+      console_prompt();
+      line_len = 0;
+    }
+    return;
+  }
+
+  while (tud_cdc_n_available(CONSOLE_ITF)) {
+    uint8_t ch;
+    if (tud_cdc_n_read(CONSOLE_ITF, &ch, 1) != 1) {
+      break;
+    }
+    if (ch == '\n' || ch == '\r') {
+      // Accept CR, LF, or CRLF as the line terminator (a raw serial terminal
+      // such as picocom sends CR on Enter). A bare Enter reprints the state.
+      console_put("\r\n", 2); // echo the newline
+      line_buf[line_len] = '\0';
+      cfg_io_t io = {.write = console_io_write, .ctx = NULL};
+      // The protocol reads lwIP/cyw43 state and may write flash, so run it
+      // under the lwIP lock.
+      cyw43_arch_lwip_begin();
+      config_proto_handle_line(&io, line_buf, g_cfg);
+      cyw43_arch_lwip_end();
+      console_prompt();
+      line_len = 0;
+    } else if (ch == '\b' || ch == 0x7f) { // backspace / delete
+      if (line_len > 0) {
+        line_len--;
+        console_put("\b \b", 3); // erase the character on the terminal
+      }
+    } else if (ch >= 0x20 && ch < 0x7f && line_len < sizeof(line_buf) - 1) {
+      line_buf[line_len++] = (char)ch;
+      console_put((const char *)&ch, 1); // echo so the terminal need not local-echo
+    }
+  }
+}

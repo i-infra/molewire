@@ -1,0 +1,311 @@
+// pico-wg-dongle: a USB WireGuard adapter.
+//
+// The Pico 2 W joins an upstream Wi-Fi network as a station, runs a WireGuard
+// tunnel on-device, and presents a CDC-NCM network interface to the USB host.
+// The host's DHCP lease IS a tunnel address: the WireGuard peer's AllowedIPs
+// covers a tiny subnet holding the Pico (gateway) and the host, so no NAT is
+// needed. The host's only route is through the Pico, the Pico forwards host
+// traffic only into the tunnel (route hook in wg.c), and DNS is the
+// tunnel-side resolver handed out over DHCP -- the host can reach the
+// WireGuard LAN and nothing else. Provisioning and status are on the CDC-ACM
+// serial console (serial_console.c).
+//
+// Derived from pico-usb-wifi (MIT, baiyibai): the USB descriptors, console,
+// config store, and main-loop robustness scaffolding carry over; the L2
+// bridge it was built around does not.
+
+#include <malloc.h>
+#include <stdio.h>
+#include <string.h>
+
+#include <hardware/watchdog.h>
+#include <lwip/netif.h>
+#include <pico/cyw43_arch.h>
+#include <pico/stdlib.h>
+
+#include "config.h"
+#include "config_proto.h"
+#include "debug_console.h"
+#include "dhcp_server.h"
+#include "serial_console.h"
+#include "usb_net.h"
+#include "wg.h"
+#include "wifi_scan.h"
+#include "wireguardif.h" // WIREGUARDIF_MTU for the DHCP option
+
+// Watchdog timeout. If the main loop stops feeding the watchdog for this long,
+// the chip resets and USB re-enumerates instead of needing a physical replug.
+#define WDT_TIMEOUT_MS 4000u
+
+// Crash telemetry that survives a watchdog reboot (see pico-usb-wifi). The C
+// runtime does not clear .uninitialized_data, so on a warm reset these fields
+// retain the values last written before the firmware hung.
+#define CRASHLOG_MAGIC 0x50574731u // "PWG1"
+typedef struct {
+  uint32_t magic;
+  uint32_t from_host, to_host, txdrop, poolfail, ring_max;
+  uint32_t boots;
+  uint32_t hangs;
+  uint32_t faults;
+  uint32_t fault_pc;
+  uint32_t fault_lr;
+  uint32_t fault_pending;
+} crashlog_t;
+static crashlog_t crashlog __attribute__((section(".uninitialized_data.crashlog")));
+
+// Hard-fault handler: record the faulting PC/LR into the crashlog (which
+// survives the reset) and reboot immediately. Overrides the pico-sdk weak
+// isr_hardfault.
+void __attribute__((used)) fault_capture(uint32_t pc, uint32_t lr) {
+  crashlog.magic = CRASHLOG_MAGIC;
+  crashlog.fault_pc = pc;
+  crashlog.fault_lr = lr;
+  crashlog.fault_pending = 1;
+  watchdog_reboot(0, 0, 0);
+  while (1) tight_loop_contents();
+}
+
+void __attribute__((naked, used)) isr_hardfault(void) {
+  __asm volatile(
+      "movs r0, #4         \n" // select the stack the fault frame is on
+      "mov  r1, lr         \n" // (EXC_RETURN bit 2: 0 = MSP, 1 = PSP)
+      "tst  r0, r1         \n"
+      "beq  1f             \n"
+      "mrs  r0, psp        \n"
+      "b    2f             \n"
+      "1:  mrs r0, msp     \n"
+      "2:  ldr r1, [r0, #20] \n" // stacked LR  -> r1 (arg1)
+      "    ldr r0, [r0, #24] \n" // stacked PC  -> r0 (arg0)
+      "    ldr r2, =fault_capture \n"
+      "    bx  r2          \n"
+      "    .ltorg          \n");
+}
+
+// Auth for the active profile: WPA2/WPA3 transition mode, or open for an empty
+// password.
+static uint32_t active_auth(const config_t *cfg) {
+  return config_active_pass(cfg)[0] ? CYW43_AUTH_WPA3_WPA2_AES_PSK : CYW43_AUTH_OPEN;
+}
+
+// Apply Wi-Fi config immediately: drop any association and re-join with the
+// active profile's credentials. Registered with the control protocol.
+static void apply_wifi(const config_t *cfg) {
+  cyw43_wifi_leave(&cyw43_state, CYW43_ITF_STA);
+  const char *ssid = config_active_ssid(cfg);
+  if (ssid[0]) {
+    cyw43_arch_wifi_connect_async(ssid, config_active_pass(cfg), active_auth(cfg));
+  }
+}
+
+// Apply WireGuard/addressing config immediately: re-address the USB link,
+// restart the DHCP server, and re-create the tunnel.
+static void apply_wg(const config_t *cfg) {
+  usb_net_set_addr(cfg->wg.addr, cfg->wg.prefix);
+  dhcp_server_start(usb_net_netif(), cfg->wg.host_addr, cfg->wg.prefix, cfg->wg.dns,
+                    WIREGUARDIF_MTU);
+  wg_apply(cfg, &cyw43_state.netif[CYW43_ITF_STA]);
+}
+
+// Free RAM: heap region minus what malloc holds out (debug console gauge).
+static uint32_t free_ram(void) {
+  extern char __StackLimit, __bss_end__;
+  struct mallinfo mi = mallinfo();
+  return (uint32_t)(&__StackLimit - &__bss_end__) - (uint32_t)mi.uordblks;
+}
+
+// Human-readable cyw43 station link status for the debug console.
+static const char *link_reason(int s) {
+  switch (s) {
+    case CYW43_LINK_DOWN: return "down";
+    case CYW43_LINK_JOIN: return "join";
+    case CYW43_LINK_NOIP: return "noip";
+    case CYW43_LINK_UP: return "up";
+    case CYW43_LINK_FAIL: return "fail";
+    case CYW43_LINK_NONET: return "nonet";
+    case CYW43_LINK_BADAUTH: return "badauth";
+    default: return "?";
+  }
+}
+
+int main(void) {
+  stdio_uart_init();
+
+  config_t cfg;
+  config_load(&cfg);
+
+  bool warm = watchdog_caused_reboot() && crashlog.magic == CRASHLOG_MAGIC;
+  crashlog_t pre = crashlog;
+  bool fault_recovered = warm && pre.fault_pending;
+  bool hang_recovered = warm && !pre.fault_pending;
+  if (crashlog.magic != CRASHLOG_MAGIC) {
+    memset(&crashlog, 0, sizeof(crashlog));
+    crashlog.magic = CRASHLOG_MAGIC;
+  }
+  crashlog.boots++;
+  if (fault_recovered) crashlog.faults++;
+  if (hang_recovered) crashlog.hangs++;
+  crashlog.fault_pending = 0;
+
+  // Bump the boot counter behind TAI64N before any handshake can happen.
+  wg_time_init();
+
+  // cyw43_arch_init also initialises lwIP; the station netif gets a DHCP
+  // client from the cyw43 glue and stays the default netif until the tunnel
+  // is up. The route hook (wg.c) keeps forwarded traffic off it regardless.
+  if (cyw43_arch_init_with_country(cfg.country)) {
+    printf("cyw43_arch_init failed\n");
+    return -1;
+  }
+  cyw43_arch_enable_sta_mode();
+  struct netif *sta = &cyw43_state.netif[CYW43_ITF_STA];
+
+  // USB side: CDC-NCM netif addressed from the WireGuard config (address-less
+  // until provisioned), DHCP server offering the host its tunnel address.
+  if (!usb_net_init(cfg.wg.addr, cfg.wg.prefix)) {
+    printf("failed to start usb network\n");
+    return -1;
+  }
+  dhcp_server_start(usb_net_netif(), cfg.wg.host_addr, cfg.wg.prefix, cfg.wg.dns,
+                    WIREGUARDIF_MTU);
+
+  serial_console_init(&cfg);
+  config_proto_set_apply(apply_wifi);
+  config_proto_set_apply_wg(apply_wg);
+
+  if (config_active_ssid(&cfg)[0] == '\0') {
+    printf("no Wi-Fi SSID configured; provision over the serial console\n");
+  } else {
+    printf("associating to '%s' ...\n", config_active_ssid(&cfg));
+    cyw43_arch_wifi_connect_async(config_active_ssid(&cfg), config_active_pass(&cfg),
+                                  active_auth(&cfg));
+  }
+
+  wg_apply(&cfg, sta);
+  printf("setup complete\n");
+
+  watchdog_enable(WDT_TIMEOUT_MS, true);
+
+  int key = 0;
+  uint32_t last_led = 0;
+  uint32_t last_join = 0;
+  uint32_t last_dbg = 0;
+  uint32_t last_wg_poll = 0;
+  bool was_up = false;
+  bool was_wg_up = false;
+  bool led_on = false;
+  bool hang_reported = false;
+  while ((key != 's') && (key != 'S')) {
+    watchdog_update();
+    usb_net_update();      // USB datapath pump
+    serial_console_task(); // CDC-ACM management console
+    debug_console_task();  // CDC-ACM debug console (drain input)
+
+    uint32_t now = to_ms_since_boot(get_absolute_time());
+
+    if (now - last_wg_poll >= 1000u) {
+      last_wg_poll = now;
+      wg_poll(); // endpoint resolution, handshake kicks, session monitoring
+      if (wg_session_up() != was_wg_up) {
+        was_wg_up = wg_session_up();
+        if (cfg.debug_enabled) {
+          debug_printf(was_wg_up ? "wireguard session up\n" : "wireguard session down\n");
+        }
+      }
+    }
+
+    if ((fault_recovered || hang_recovered) && !hang_reported && usb_net_is_up()) {
+      hang_reported = true;
+      if (fault_recovered) {
+        debug_printf("RECOVERED from HARD FAULT pc=0x%08lx lr=0x%08lx (fault #%lu, boot #%lu)\n",
+                     (unsigned long)pre.fault_pc, (unsigned long)pre.fault_lr,
+                     (unsigned long)crashlog.faults, (unsigned long)crashlog.boots);
+        printf("RECOVERED from HARD FAULT pc=0x%08lx lr=0x%08lx\n",
+               (unsigned long)pre.fault_pc, (unsigned long)pre.fault_lr);
+      } else {
+        debug_printf("RECOVERED from hang (watchdog timeout, no fault; hang #%lu, boot #%lu)\n",
+                     (unsigned long)crashlog.hangs, (unsigned long)crashlog.boots);
+        printf("RECOVERED from hang via watchdog (hang #%lu)\n", (unsigned long)crashlog.hangs);
+      }
+    }
+
+    // Periodic stats on the debug console, only when enabled.
+    if (cfg.debug_enabled && (now - last_dbg >= 2000u)) {
+      last_dbg = now;
+      usb_net_stats_t s;
+      usb_net_get_stats(&s);
+      const char *link = netif_is_link_up(sta)
+                             ? "up"
+                             : link_reason(cyw43_wifi_link_status(&cyw43_state, CYW43_ITF_STA));
+      char sta_ip[16];
+      ip4addr_ntoa_r(netif_ip4_addr(sta), sta_ip, sizeof(sta_ip));
+      debug_printf("stats: h>%lu >h%lu txdrop=%lu poolfail=%lu ringpk=%lu wifi=%s(%s) "
+                   "wg=%s lease=%s hangs=%lu faults=%lu freeram=%lu\n",
+                   (unsigned long)s.from_host, (unsigned long)s.to_host,
+                   (unsigned long)s.txdrop, (unsigned long)s.poolfail,
+                   (unsigned long)usb_net_ring_recent_reset(), link, sta_ip, wg_state_str(),
+                   dhcp_server_leased() ? "yes" : "no", (unsigned long)crashlog.hangs,
+                   (unsigned long)crashlog.faults, (unsigned long)free_ram());
+    }
+
+    // LED:
+    //   solid              = tunnel up (session established)
+    //   slow blink (1 Hz)  = associating / handshaking
+    //   fast blink (5 Hz)  = unprovisioned (Wi-Fi or WireGuard config missing)
+    //   double-flash       = live (continuous) scan
+    //   off                = USB not ready
+    if (config_proto_contscan_active()) {
+      uint32_t t = now % 2000u;
+      bool on = usb_net_is_up() && ((t < 70u) || (t >= 220u && t < 290u));
+      if (on != led_on) {
+        cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN, on);
+        led_on = on;
+      }
+    } else if (now - last_led >= 50u) {
+      last_led = now;
+
+      usb_net_stats_t cs;
+      usb_net_get_stats(&cs);
+      crashlog.from_host = cs.from_host;
+      crashlog.to_host = cs.to_host;
+      crashlog.txdrop = cs.txdrop;
+      crashlog.poolfail = cs.poolfail;
+      crashlog.ring_max = cs.ring_max;
+
+      bool usb_ok = usb_net_is_up();
+      bool wifi_link = netif_is_link_up(sta);
+      bool provisioned = config_active_ssid(&cfg)[0] != '\0' && config_wg_complete(&cfg);
+      bool on;
+      if (!usb_ok) {
+        on = false;
+      } else if (wg_session_up()) {
+        on = true;
+      } else if (!provisioned) {
+        on = (now % 200u) < 100u;
+      } else {
+        on = (now % 1000u) < 500u;
+      }
+      cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN, on);
+      led_on = on;
+
+      if (wifi_link && !was_up) {
+        if (cfg.debug_enabled) debug_printf("associated to %s\n", config_active_ssid(&cfg));
+      } else if (!wifi_link && was_up) {
+        if (cfg.debug_enabled) debug_printf("Wi-Fi link down\n");
+      }
+      was_up = wifi_link;
+      if (!wifi_link && config_active_ssid(&cfg)[0] && !wifi_scan_in_progress() &&
+          (now - last_join >= 10000u)) {
+        last_join = now;
+        cyw43_arch_wifi_connect_async(config_active_ssid(&cfg), config_active_pass(&cfg),
+                                      active_auth(&cfg));
+      }
+    }
+
+    key = getchar_timeout_us(0);
+  }
+
+  printf("shutting down\n");
+  usb_net_deinit();
+  cyw43_arch_deinit();
+  return 0;
+}
