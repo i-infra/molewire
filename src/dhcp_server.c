@@ -29,6 +29,7 @@
 #define OPT_LEASE_TIME 51
 #define OPT_MSG_TYPE 53
 #define OPT_SERVER_ID 54
+#define OPT_CLASSLESS_ROUTES 121
 #define OPT_END 255
 
 #define LEASE_TIME_S 86400u
@@ -46,7 +47,7 @@ typedef struct __attribute__((packed)) {
 } dhcp_msg_t;
 
 #define DHCP_MAGIC 0x63825363u // network order after lwip_htonl
-#define REPLY_OPTS_MAX 64
+#define REPLY_OPTS_MAX 128     // fixed options + up to 4 option-121 routes
 
 static struct udp_pcb *pcb;
 static struct netif *usb_nif;
@@ -54,6 +55,8 @@ static uint32_t lease_addr;  // host address, network order
 static uint32_t lease_mask;  // network order
 static uint32_t lease_dns;   // network order (0 = omit option 6)
 static uint16_t lease_mtu;
+static wg_route_t lease_routes[CONFIG_ROUTES_MAX];
+static uint8_t lease_route_count; // 0 = full-gateway mode
 static volatile bool leased;
 
 // Find option `code` in the options block; returns pointer to its length byte
@@ -147,7 +150,27 @@ static void dhcp_recv(void *arg, struct udp_pcb *upcb, struct pbuf *p,
     uint32_t lease_be = lwip_htonl(LEASE_TIME_S);
     o = put_opt(o, OPT_LEASE_TIME, &lease_be, 4);
     o = put_opt(o, OPT_SUBNET_MASK, &lease_mask, 4);
-    o = put_opt(o, OPT_ROUTER, &sid, 4);
+    if (lease_route_count == 0) {
+      // Full-gateway mode: the Pico is the host's default router.
+      o = put_opt(o, OPT_ROUTER, &sid, 4);
+    } else {
+      // Split mode: no default route. Push each subnet as a classless static
+      // route via the Pico (RFC 3442: prefix length, the significant octets
+      // of the destination, then the gateway). Clients that support option
+      // 121 ignore option 3 by spec, but we omit it anyway.
+      uint8_t buf[CONFIG_ROUTES_MAX * 9];
+      uint8_t n = 0;
+      for (uint8_t i = 0; i < lease_route_count; i++) {
+        uint8_t plen = lease_routes[i].prefix;
+        uint8_t octets = (uint8_t)((plen + 7) / 8);
+        buf[n++] = plen;
+        memcpy(buf + n, &lease_routes[i].net, octets);
+        n = (uint8_t)(n + octets);
+        memcpy(buf + n, &sid, 4);
+        n = (uint8_t)(n + 4);
+      }
+      o = put_opt(o, OPT_CLASSLESS_ROUTES, buf, n);
+    }
     if (lease_dns) {
       o = put_opt(o, OPT_DNS, &lease_dns, 4);
     }
@@ -168,12 +191,17 @@ static void dhcp_recv(void *arg, struct udp_pcb *upcb, struct pbuf *p,
 }
 
 void dhcp_server_start(struct netif *nif, uint32_t host_addr, uint8_t prefix,
-                       uint32_t dns, uint16_t mtu) {
+                       uint32_t dns, uint16_t mtu, const wg_route_t *routes,
+                       uint8_t route_count) {
   usb_nif = nif;
   lease_addr = host_addr;
   lease_mask = prefix ? lwip_htonl(0xFFFFFFFFu << (32 - prefix)) : 0;
   lease_dns = dns;
   lease_mtu = mtu;
+  lease_route_count = (uint8_t)(route_count > CONFIG_ROUTES_MAX ? CONFIG_ROUTES_MAX : route_count);
+  if (routes && lease_route_count) {
+    memcpy(lease_routes, routes, lease_route_count * sizeof(wg_route_t));
+  }
   leased = false;
 
   if (!pcb) {

@@ -16,13 +16,22 @@ extern "C" {
 #include <stdbool.h>
 #include <stdint.h>
 
+#include "config.h" // wg_route_t
+
 struct netif;
 
 // Start (or re-start) the server on the given netif. host_addr/dns are IPv4 in
 // network byte order; prefix is the USB-link subnet prefix length; mtu is the
 // value for option 26 (the WireGuard MTU). host_addr 0 stops the server.
+//
+// route_count 0: full-gateway mode -- the Pico is offered as default router
+// (option 3). route_count > 0: split mode -- no router option; the given
+// subnets are pushed as classless static routes via the Pico (option 121), so
+// the host keeps its own default route and only tunnel subnets ride the USB
+// link. dns 0 omits option 6 entirely.
 void dhcp_server_start(struct netif *nif, uint32_t host_addr, uint8_t prefix,
-                       uint32_t dns, uint16_t mtu);
+                       uint32_t dns, uint16_t mtu, const wg_route_t *routes,
+                       uint8_t route_count);
 
 // True once the host has ACKed its lease (for status display / LED).
 bool dhcp_server_leased(void);

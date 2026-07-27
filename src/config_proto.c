@@ -177,6 +177,16 @@ void config_proto_dump(const cfg_io_t *io, const config_t *cfg) {
     snprintf(line, sizeof(line), "    host mtu:   %u\n", w->host_mtu);
     out(io, line);
   }
+  if (w->route_count) {
+    out(io, "    mode:       split -- host keeps its own default route; routed here:\n");
+    for (uint8_t i = 0; i < w->route_count; i++) {
+      fmt_ip4(a, sizeof(a), w->routes[i].net);
+      snprintf(line, sizeof(line), "                  %s/%u\n", a, w->routes[i].prefix);
+      out(io, line);
+    }
+  } else {
+    out(io, "    mode:       gateway -- host default-routes through the tunnel\n");
+  }
   snprintf(line, sizeof(line), "    tunnel state: %s; host lease: %s\n", wg_state_str(),
            dhcp_server_leased() ? "yes" : "no");
   out(io, line);
@@ -363,12 +373,59 @@ static int cmd_set(const cfg_io_t *io, char *args, config_t *cfg) {
     cfg->wg.host_addr = a;
     return SET_WG;
   } else if (strcasecmp(args, "dns") == 0) {
+    if (strcasecmp(val, "off") == 0) {
+      cfg->wg.dns = 0; // offer no resolver; the host keeps its own
+      return SET_WG;
+    }
     uint32_t a = parse_ip4(val);
     if (!a) {
-      out(io, "ERR usage: set dns <a.b.c.d>\n");
+      out(io, "ERR usage: set dns <a.b.c.d|off>\n");
       return SET_ERR;
     }
     cfg->wg.dns = a;
+    return SET_WG;
+  } else if (strcasecmp(args, "routes") == 0) {
+    // "set routes off" -> full-gateway mode (Pico becomes the host's default
+    // route). "set routes <cidr>[,<cidr>...]" -> split mode: only these
+    // subnets are routed to the Pico (DHCP option 121); the host keeps its
+    // own default route and DNS path.
+    if (strcasecmp(val, "off") == 0) {
+      cfg->wg.route_count = 0;
+      return SET_WG;
+    }
+    wg_route_t parsed[CONFIG_ROUTES_MAX];
+    uint8_t n = 0;
+    char *tok = val;
+    while (tok && *tok) {
+      char *comma = strchr(tok, ',');
+      if (comma) *comma++ = '\0';
+      char *slash = strchr(tok, '/');
+      if (!slash) {
+        out(io, "ERR routes are <a.b.c.d/nn>, comma-separated\n");
+        return SET_ERR;
+      }
+      *slash++ = '\0';
+      uint32_t net = parse_ip4(tok);
+      long plen = strtol(slash, NULL, 10);
+      if ((!net && strcmp(tok, "0.0.0.0") != 0) || plen < 1 || plen > 32) {
+        out(io, "ERR bad route (prefix 1-32)\n");
+        return SET_ERR;
+      }
+      if (n >= CONFIG_ROUTES_MAX) {
+        out(io, "ERR too many routes (max 4)\n");
+        return SET_ERR;
+      }
+      parsed[n].net = net;
+      parsed[n].prefix = (uint8_t)plen;
+      n++;
+      tok = comma;
+    }
+    if (n == 0) {
+      out(io, "ERR usage: set routes <a.b.c.d/nn>[,...] | off\n");
+      return SET_ERR;
+    }
+    memcpy(cfg->wg.routes, parsed, sizeof(parsed));
+    cfg->wg.route_count = n;
     return SET_WG;
   } else if (strcasecmp(args, "keepalive") == 0) {
     long k = strtol(val, NULL, 10);
@@ -472,8 +529,8 @@ static void handle_main(const cfg_io_t *io, char *cmd, char *args, config_t *cfg
     config_proto_dump(io, cfg);
   } else {
     out(io, "[!] commands: set <ssid|pass|country|debug|key|peer|psk|endpoint|addr|"
-            "hostip|dns|keepalive|mtu> <val> | list | use <n> | del <n> | scan | "
-            "save | restore | reboot | bootsel\n");
+            "hostip|dns|keepalive|mtu|routes> <val> | list | use <n> | del <n> | "
+            "scan | save | restore | reboot | bootsel\n");
   }
 }
 

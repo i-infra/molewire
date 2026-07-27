@@ -102,7 +102,8 @@ static void apply_wifi(const config_t *cfg) {
 static void apply_wg(const config_t *cfg) {
   usb_net_set_addr(cfg->wg.addr, cfg->wg.prefix);
   dhcp_server_start(usb_net_netif(), cfg->wg.host_addr, cfg->wg.prefix, cfg->wg.dns,
-                    cfg->wg.host_mtu ? cfg->wg.host_mtu : WIREGUARDIF_MTU);
+                    cfg->wg.host_mtu ? cfg->wg.host_mtu : WIREGUARDIF_MTU, cfg->wg.routes,
+                    cfg->wg.route_count);
   wg_apply(cfg, &cyw43_state.netif[CYW43_ITF_STA]);
 }
 
@@ -166,7 +167,8 @@ int main(void) {
     return -1;
   }
   dhcp_server_start(usb_net_netif(), cfg.wg.host_addr, cfg.wg.prefix, cfg.wg.dns,
-                    cfg.wg.host_mtu ? cfg.wg.host_mtu : WIREGUARDIF_MTU);
+                    cfg.wg.host_mtu ? cfg.wg.host_mtu : WIREGUARDIF_MTU, cfg.wg.routes,
+                    cfg.wg.route_count);
 
   serial_console_init(&cfg);
   config_proto_set_apply(apply_wifi);

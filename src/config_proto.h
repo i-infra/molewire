@@ -27,6 +27,10 @@
 //   set keepalive <secs>  persistent keepalive (0 = off)
 //   set mtu <bytes>       MTU handed to the host via DHCP (0 = WG default 1420;
 //                         set 1280 when the server bridges into Tailscale)
+//   set routes <cidr,...> split mode: host keeps its own default route; only
+//                         these subnets (max 4) route via the dongle (opt 121)
+//   set routes off        full-gateway mode: host default-routes through tunnel
+//   set dns off           offer the host no resolver (keep its own DNS)
 //   list                  list the saved profiles
 //   use <n>               make profile n active and re-associate
 //   del <n>               delete profile n

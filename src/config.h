@@ -27,10 +27,23 @@
 #define CONFIG_WGKEY_MAX 46     // 44 base64 chars + NUL, rounded up
 #define CONFIG_ENDPOINT_MAX 64  // WireGuard endpoint hostname or IPv4 literal
 
+// A subnet pushed to the host as a DHCP option-121 classless static route.
+#define CONFIG_ROUTES_MAX 4
+typedef struct {
+  uint32_t net;   // network address, network byte order
+  uint8_t prefix; // prefix length
+  uint8_t _rpad[3];
+} wg_route_t;
+
 // WireGuard settings. Addresses are IPv4 in network byte order (as produced by
 // ipaddr_aton), zero = unset. The device and host addresses are two tunnel
 // addresses covered by the peer's AllowedIPs on the server; prefix is the mask
 // length of the little USB-link subnet that contains them both (typically /30).
+//
+// route_count selects the host's routing mode: 0 = full-gateway (DHCP hands
+// the Pico as default router; every host packet rides the tunnel), >0 = split
+// (no default route -- only the listed subnets are routed to the Pico via
+// option 121, and the host keeps its own internet/DNS path).
 typedef struct {
   char private_key[CONFIG_WGKEY_MAX]; // this device's key, base64 ("" = unset)
   char peer_public[CONFIG_WGKEY_MAX]; // server's public key, base64
@@ -43,9 +56,11 @@ typedef struct {
   uint16_t _pad0;       // keep the u32 fields below aligned
   uint32_t addr;        // this device's tunnel address (USB-side gateway)
   uint32_t host_addr;   // the address DHCP leases to the USB host
-  uint32_t dns;         // resolver handed to the host (reached through the tunnel)
+  uint32_t dns;         // resolver handed to the host (0 = offer none)
   uint8_t prefix;       // USB-link subnet prefix length (e.g. 30)
-  uint8_t _wgpad[3];
+  uint8_t route_count;  // valid entries in routes[]; 0 = full-gateway mode
+  uint8_t _wgpad[2];
+  wg_route_t routes[CONFIG_ROUTES_MAX]; // split-mode subnets for option 121
 } wg_config_t;
 
 // One saved network's credentials.
