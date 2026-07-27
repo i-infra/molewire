@@ -88,3 +88,26 @@ target_include_directories(pico-wg-dongle PRIVATE
 )
 
 pico_add_extra_outputs(pico-wg-dongle)
+
+# --- crypto profiling bench (separate firmware; see bench/bench_main.c) ----------
+# Deliberately does NOT use src/ (its tusb_config.h would fight pico_stdio_usb's
+# own USB-CDC configuration). Output on both USB serial and UART.
+add_executable(pico-wg-bench
+    bench/bench_main.c
+    wireguard/crypto.c
+    wireguard/crypto/refc/blake2s.c
+    wireguard/crypto/refc/chacha20.c
+    wireguard/crypto/refc/chacha20poly1305.c
+    wireguard/crypto/refc/poly1305-donna.c
+    wireguard/crypto/refc/x25519.c
+    wireguard/crypto/cortex/scalarmult.c
+    wireguard/crypto/cortex/mul.s
+    wireguard/crypto/cortex/sqr.s
+    wireguard/crypto/cortex/cortex_m0_mpy121666.s
+    wireguard/crypto/cortex/cortex_m0_reduce25519.s
+)
+pico_enable_stdio_uart(pico-wg-bench 1)
+pico_enable_stdio_usb(pico-wg-bench 1)
+target_link_libraries(pico-wg-bench pico_stdlib pico_rand)
+target_include_directories(pico-wg-bench PRIVATE ${CMAKE_CURRENT_LIST_DIR}/wireguard)
+pico_add_extra_outputs(pico-wg-bench)
