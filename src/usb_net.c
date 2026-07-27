@@ -16,6 +16,7 @@
 #include <pico/unique_id.h>
 #include <tusb.h>
 
+#include "debug_console.h"
 #include "usb_net.h"
 
 // The MAC TinyUSB reports in the NCM iMACAddress string descriptor -- the
@@ -113,6 +114,70 @@ static err_t usb_netif_init_cb(struct netif *n) {
   return ERR_OK;
 }
 
+// --- host TX checksum offload (defensive) ----------------------------------------
+//
+// If a host driver ever does TX checksum offload over NCM (hands us frames
+// with zeroed checksums, expecting "the NIC" to fill them), repair them here
+// before lwIP sees the packet. Empirically macOS and Linux both send valid
+// checksums over NCM, so today this is a cheap no-op -- it exists so an
+// offloading host can't silently poison forwarded traffic. (The zeroed
+// checksums we actually chased in the field came from lwIP's own ip4_forward;
+// that fix lives in wireguardif.c.)
+
+static uint32_t csum_add(uint32_t sum, const uint8_t *d, uint16_t n) {
+  while (n > 1) {
+    sum += ((uint32_t)d[0] << 8) | d[1];
+    d += 2;
+    n = (uint16_t)(n - 2);
+  }
+  if (n) {
+    sum += (uint32_t)d[0] << 8;
+  }
+  return sum;
+}
+
+static uint16_t csum_finish(uint32_t s) {
+  while (s >> 16) {
+    s = (s & 0xFFFF) + (s >> 16);
+  }
+  return (uint16_t)~s;
+}
+
+static void fix_host_checksums(uint8_t *f, uint16_t flen) {
+  if (flen < 34 || f[12] != 0x08 || f[13] != 0x00) {
+    return; // not IPv4
+  }
+  uint8_t *ip = f + 14;
+  uint8_t ihl = (uint8_t)((ip[0] & 0x0F) * 4);
+  uint16_t tot = (uint16_t)(((uint16_t)ip[2] << 8) | ip[3]);
+  if ((ip[0] >> 4) != 4 || ihl < 20 || tot < ihl || (uint16_t)(14 + tot) > flen) {
+    return;
+  }
+  if (ip[10] == 0 && ip[11] == 0) { // header checksum 0 = offloaded
+    uint16_t c = csum_finish(csum_add(0, ip, ihl));
+    ip[10] = (uint8_t)(c >> 8);
+    ip[11] = (uint8_t)c;
+  }
+  if ((ip[6] & 0x3F) || ip[7]) {
+    return; // fragment with nonzero offset: no L4 header here
+  }
+  uint8_t proto = ip[9];
+  uint8_t *l4 = ip + ihl;
+  uint16_t l4len = (uint16_t)(tot - ihl);
+  if (proto == 1 && l4len >= 8 && l4[2] == 0 && l4[3] == 0) { // ICMP
+    uint16_t c = csum_finish(csum_add(0, l4, l4len));
+    l4[2] = (uint8_t)(c >> 8);
+    l4[3] = (uint8_t)c;
+  } else if (proto == 6 && l4len >= 20 && l4[16] == 0 && l4[17] == 0) { // TCP
+    uint32_t s = csum_add(0, ip + 12, 8); // pseudo header: src+dst
+    s += (uint32_t)proto + l4len;         // ... zero, proto, tcp length
+    uint16_t c = csum_finish(csum_add(s, l4, l4len));
+    l4[16] = (uint8_t)(c >> 8);
+    l4[17] = (uint8_t)c;
+  }
+  // UDP checksum 0 is legal over IPv4 (RFC 768) -- leave it alone.
+}
+
 // --- TinyUSB network callbacks -------------------------------------------------
 
 void tud_network_init_cb(void) {
@@ -146,7 +211,13 @@ bool tud_network_recv_cb(const uint8_t *src, uint16_t size) {
 uint16_t tud_network_xmit_cb(uint8_t *dst, void *ref, uint16_t arg) {
   struct pbuf *p = (struct pbuf *)ref;
   (void)arg;
-  return pbuf_copy_partial(p, dst, p->tot_len, 0);
+  uint16_t n = pbuf_copy_partial(p, dst, p->tot_len, 0);
+  // Mirror of the wireguardif.c egress patch: lwIP's ip4_forward zeroes the
+  // checksums of tunnel->host packets too, and the host's stack silently
+  // drops zero-checksum datagrams. The frame is a contiguous copy here, so
+  // regenerate any zeroed checksums before it goes over USB.
+  fix_host_checksums(dst, n);
+  return n;
 }
 
 // --- public api ------------------------------------------------------------------
@@ -208,6 +279,12 @@ void usb_net_update(void) {
     struct pbuf *p = received_frame;
     received_frame = NULL; // consume before input(): the callback may re-stage
     cnt_from_host++;
+    // The staged frame is a single contiguous pbuf (tud_network_recv_cb
+    // allocates it frame-sized); fill in any host-offloaded checksums before
+    // lwIP sees it.
+    if (p->next == NULL) {
+      fix_host_checksums((uint8_t *)p->payload, p->len);
+    }
     cyw43_arch_lwip_begin();
     if (usb_netif.input(p, &usb_netif) != ERR_OK) {
       pbuf_free(p);

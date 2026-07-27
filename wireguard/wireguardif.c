@@ -78,6 +78,73 @@ static bool wireguardif_can_send_initiation(struct wireguard_peer *peer) {
 	return ((peer->last_initiation_tx == 0) || (wireguard_expired(peer->last_initiation_tx, REKEY_TIMEOUT)));
 }
 
+// Local addition (pico-wg-dongle): recompute the IPv4 header and L4 checksums
+// of a contiguous IP packet in place. Needed because lwIP 2.2's ip4_forward
+// zeroes them on every forwarded packet (see the call site below). Fields are
+// recomputed only when zero, so valid checksums pass through untouched.
+static uint32_t wg_csum_add(uint32_t sum, const uint8_t *d, uint16_t n) {
+	while (n > 1) {
+		sum += ((uint32_t)d[0] << 8) | d[1];
+		d += 2;
+		n = (uint16_t)(n - 2);
+	}
+	if (n) {
+		sum += (uint32_t)d[0] << 8;
+	}
+	return sum;
+}
+
+static uint16_t wg_csum_finish(uint32_t s) {
+	while (s >> 16) {
+		s = (s & 0xFFFF) + (s >> 16);
+	}
+	return (uint16_t)~s;
+}
+
+static void wireguardif_fix_checksums(uint8_t *ip, size_t len) {
+	if (len < 20 || (ip[0] >> 4) != 4) {
+		return; // not IPv4
+	}
+	uint8_t ihl = (uint8_t)((ip[0] & 0x0F) * 4);
+	uint16_t tot = (uint16_t)(((uint16_t)ip[2] << 8) | ip[3]);
+	if (ihl < 20 || tot < ihl || tot > len) {
+		return;
+	}
+	if (ip[10] == 0 && ip[11] == 0) {
+		uint16_t c = wg_csum_finish(wg_csum_add(0, ip, ihl));
+		ip[10] = (uint8_t)(c >> 8);
+		ip[11] = (uint8_t)c;
+	}
+	if ((ip[6] & 0x3F) || ip[7]) {
+		return; // fragment with nonzero offset: no L4 header here
+	}
+	uint8_t proto = ip[9];
+	uint8_t *l4 = ip + ihl;
+	uint16_t l4len = (uint16_t)(tot - ihl);
+	if (proto == 1 && l4len >= 8 && l4[2] == 0 && l4[3] == 0) { // ICMP
+		uint16_t c = wg_csum_finish(wg_csum_add(0, l4, l4len));
+		l4[2] = (uint8_t)(c >> 8);
+		l4[3] = (uint8_t)c;
+	} else if (proto == 6 && l4len >= 20 && l4[16] == 0 && l4[17] == 0) { // TCP
+		uint32_t s = wg_csum_add(0, ip + 12, 8); // pseudo header: src + dst
+		s += (uint32_t)proto + l4len;
+		uint16_t c = wg_csum_finish(wg_csum_add(s, l4, l4len));
+		l4[16] = (uint8_t)(c >> 8);
+		l4[17] = (uint8_t)c;
+	} else if (proto == 17 && l4len >= 8 && l4[6] == 0 && l4[7] == 0) { // UDP
+		// Zero is technically "no checksum" for IPv4 UDP, but here it more
+		// likely means ip4_forward wiped a real one -- restore it.
+		uint32_t s = wg_csum_add(0, ip + 12, 8);
+		s += (uint32_t)proto + l4len;
+		uint16_t c = wg_csum_finish(wg_csum_add(s, l4, l4len));
+		if (c == 0) {
+			c = 0xFFFF; // RFC 768: transmitted 0 means "none"; use the alternate form
+		}
+		l4[6] = (uint8_t)(c >> 8);
+		l4[7] = (uint8_t)c;
+	}
+}
+
 static err_t wireguardif_peer_output(struct netif *netif, struct pbuf *q, struct wireguard_peer *peer) {
 	struct wireguard_device *device = (struct wireguard_device *)netif->state;
 	// Send to last know port, not the connect port
@@ -147,6 +214,17 @@ static err_t wireguardif_output_to_peer(struct netif *netif, struct pbuf *q, con
 
 					// Copy pbuf to memory - handles case where pbuf is chained
 					pbuf_copy_partial(q, dst, unpadded_len, 0);
+
+					// Local addition (pico-wg-dongle): lwIP 2.2's ip4_forward
+					// ZEROES the IP and L4 checksums of every forwarded packet
+					// (its "checksum offload" handling triggers whenever
+					// CHECKSUM_GEN_* is enabled), expecting the output driver
+					// to regenerate them. An Ethernet driver would; a tunnel
+					// encrypts the packet verbatim, so the zeros would be
+					// sealed inside and the far end's kernel discards the
+					// datagram as malformed. Regenerate them here, on the
+					// contiguous copy, just before encryption.
+					wireguardif_fix_checksums(dst, unpadded_len);
 				}
 
 				// Then encrypt
