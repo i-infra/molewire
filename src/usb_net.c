@@ -143,6 +143,48 @@ static uint16_t csum_finish(uint32_t s) {
   return (uint16_t)~s;
 }
 
+// TCP MSS clamp for forwarded connections, applied to SYNs in both directions.
+// The end-to-end path MTU through a re-encapsulating server (e.g. a Tailscale
+// bridge) can be well below anything the host will let us configure on its
+// interface (macOS refuses MTU < 1280), so the router rewrites the MSS option
+// like any commercial gateway would. 0 disables.
+static uint16_t g_mss_clamp;
+
+void usb_net_set_mss_clamp(uint16_t mss) { g_mss_clamp = mss; }
+
+// Returns true if it rewrote the option (checksum must then be regenerated).
+static bool clamp_tcp_mss(uint8_t *l4, uint16_t l4len) {
+  if (!g_mss_clamp || l4len < 20 || !(l4[13] & 0x02)) {
+    return false; // no clamp configured, or not a SYN
+  }
+  uint8_t doff = (uint8_t)((l4[12] >> 4) * 4);
+  if (doff < 24 || doff > l4len) {
+    return false; // no options present (or malformed)
+  }
+  uint16_t off = 20;
+  while (off + 1 < doff) {
+    uint8_t kind = l4[off];
+    if (kind == 0) break; // end of options
+    if (kind == 1) {      // NOP
+      off++;
+      continue;
+    }
+    uint8_t olen = l4[off + 1];
+    if (olen < 2 || off + olen > doff) break;
+    if (kind == 2 && olen == 4) { // MSS
+      uint16_t mss = (uint16_t)(((uint16_t)l4[off + 2] << 8) | l4[off + 3]);
+      if (mss > g_mss_clamp) {
+        l4[off + 2] = (uint8_t)(g_mss_clamp >> 8);
+        l4[off + 3] = (uint8_t)g_mss_clamp;
+        return true;
+      }
+      return false;
+    }
+    off = (uint16_t)(off + olen);
+  }
+  return false;
+}
+
 static void fix_host_checksums(uint8_t *f, uint16_t flen) {
   if (flen < 34 || f[12] != 0x08 || f[13] != 0x00) {
     return; // not IPv4
@@ -168,12 +210,18 @@ static void fix_host_checksums(uint8_t *f, uint16_t flen) {
     uint16_t c = csum_finish(csum_add(0, l4, l4len));
     l4[2] = (uint8_t)(c >> 8);
     l4[3] = (uint8_t)c;
-  } else if (proto == 6 && l4len >= 20 && l4[16] == 0 && l4[17] == 0) { // TCP
-    uint32_t s = csum_add(0, ip + 12, 8); // pseudo header: src+dst
-    s += (uint32_t)proto + l4len;         // ... zero, proto, tcp length
-    uint16_t c = csum_finish(csum_add(s, l4, l4len));
-    l4[16] = (uint8_t)(c >> 8);
-    l4[17] = (uint8_t)c;
+  } else if (proto == 6 && l4len >= 20) { // TCP
+    if (clamp_tcp_mss(l4, l4len)) {
+      l4[16] = 0; // force checksum regeneration below
+      l4[17] = 0;
+    }
+    if (l4[16] == 0 && l4[17] == 0) {
+      uint32_t s = csum_add(0, ip + 12, 8); // pseudo header: src+dst
+      s += (uint32_t)proto + l4len;         // ... zero, proto, tcp length
+      uint16_t c = csum_finish(csum_add(s, l4, l4len));
+      l4[16] = (uint8_t)(c >> 8);
+      l4[17] = (uint8_t)c;
+    }
   }
   // UDP checksum 0 is legal over IPv4 (RFC 768) -- leave it alone.
 }

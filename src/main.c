@@ -104,6 +104,9 @@ static void apply_wg(const config_t *cfg) {
   dhcp_server_start(usb_net_netif(), cfg->wg.host_addr, cfg->wg.prefix, cfg->wg.dns,
                     cfg->wg.host_mtu ? cfg->wg.host_mtu : WIREGUARDIF_MTU, cfg->wg.routes,
                     cfg->wg.route_count);
+  // MSS clamp = configured path MTU minus IP+TCP headers, so TCP fits even
+  // when the host ignores/rejects the DHCP MTU (macOS floors at 1280).
+  usb_net_set_mss_clamp(cfg->wg.host_mtu ? (uint16_t)(cfg->wg.host_mtu - 40) : 0);
   wg_apply(cfg, &cyw43_state.netif[CYW43_ITF_STA]);
 }
 

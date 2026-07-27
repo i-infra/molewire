@@ -50,6 +50,11 @@ void usb_net_get_stats(usb_net_stats_t *s);
 // the debug console; ring_max latches at the ceiling).
 uint32_t usb_net_ring_recent_reset(void);
 
+// Clamp the MSS option of forwarded TCP SYNs (both directions) to this value;
+// 0 disables. Set to path-MTU minus 40 so TCP fits through re-encapsulating
+// servers regardless of the host's interface MTU.
+void usb_net_set_mss_clamp(uint16_t mss);
+
 #ifdef __cplusplus
 }
 #endif

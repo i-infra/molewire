@@ -259,6 +259,12 @@ void wg_apply(const config_t *cfg, struct netif *sta) {
   cyw43_arch_lwip_begin();
   if (netif_add(&wg_netif, &addr, &mask, &gw, &init_data, wireguardif_init, ip_input)) {
     wg_netif_added = true;
+    // Advertise the measured/configured path MTU on the tunnel netif so
+    // oversized forwards get fragmented or answered with ICMP frag-needed
+    // instead of black-holing beyond a re-encapsulating server.
+    if (wgc.host_mtu && wgc.host_mtu < wg_netif.mtu) {
+      wg_netif.mtu = wgc.host_mtu;
+    }
     netif_set_up(&wg_netif);
     wg_state = WG_RESOLVING; // waiting for endpoint and/or Wi-Fi
   } else {
