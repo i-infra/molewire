@@ -31,6 +31,9 @@
 //   scan                  scan for nearby networks (enters the scan submenu)
 //   save                  persist the current settings to flash
 //   restore               discard unsaved changes (reload the saved settings)
+//   reboot                restart the firmware
+//   bootsel               restart into the UF2 bootloader (reflash without
+//                         touching the board; a 1200-baud CDC open does the same)
 //
 // Scan submenu (after scan, once results are listed):
 //   join <n>              stage scanned network n as the active profile

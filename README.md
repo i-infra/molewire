@@ -47,8 +47,28 @@ with the `cyw43-driver`, `lwip`, `tinyusb`, and `mbedtls` submodules.
 ```sh
 PICO_SDK_PATH=/path/to/pico-sdk cmake -S . -B build -G Ninja -DPICO_BOARD=pico2_w
 cmake --build build
-# flash: hold BOOTSEL, plug in, copy build/pico-wg-dongle.uf2 to the drive
+# first flash: hold BOOTSEL, plug in, copy build/pico-wg-dongle.uf2 to the drive
 ```
+
+### Reflashing without touching the board
+
+Once this firmware (or the bench) is running, the button is never needed again —
+three ways to land back in the UF2 bootloader:
+
+- type `bootsel` on the management console (`reboot` for a plain restart);
+- open either CDC port at 1200 baud: `stty -f /dev/cu.usbmodem<n> 1200`
+  (Linux: `stty -F /dev/ttyACM0 1200`);
+- `picotool reboot -f -u` (needs a USB-capable picotool, e.g. `brew install picotool`).
+
+A typical development loop is then:
+
+```sh
+cmake --build build \
+  && stty -f /dev/cu.usbmodem* 1200 ; sleep 2 \
+  && cp build/pico-wg-dongle.uf2 /Volumes/RP2350/
+```
+
+The bench firmware honors the 1200-baud reset too (via pico_stdio_usb).
 
 ## Provisioning
 

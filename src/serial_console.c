@@ -4,6 +4,7 @@
 #include <stdio.h>
 #include <string.h>
 
+#include <pico/bootrom.h>    // reset_usb_boot for the 1200-baud touch
 #include <pico/cyw43_arch.h> // lwIP lock for the protocol's lwIP/config reads
 #include <tusb.h>
 
@@ -14,6 +15,17 @@
 // The CDC-ACM management console is the only CDC-ACM instance (the network
 // class is a separate USB function), so it is always CDC index 0.
 #define CONSOLE_ITF 0
+
+// Arduino-style development convenience: opening either CDC port at 1200 baud
+// reboots into the UF2 bootloader, so a new image can be flashed without
+// touching the board ("stty -f /dev/cu.usbmodem* 1200", or picotool). The rate
+// is otherwise meaningless on a virtual port, so nothing legitimate collides.
+void tud_cdc_line_coding_cb(uint8_t itf, cdc_line_coding_t const *coding) {
+  (void)itf;
+  if (coding->bit_rate == 1200) {
+    reset_usb_boot(0, 0);
+  }
+}
 
 static config_t *g_cfg;
 static char line_buf[192];

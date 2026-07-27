@@ -6,9 +6,12 @@
 #include <string.h>
 #include <strings.h>
 
+#include <hardware/watchdog.h> // watchdog_reboot for the REBOOT command
 #include <lwip/ip4_addr.h>
 #include <lwip/netif.h>
+#include <pico/bootrom.h>    // reset_usb_boot for the BOOTSEL command
 #include <pico/cyw43_arch.h> // CYW43_COUNTRY(...) / cyw43_state
+#include <tusb.h>            // tud_task to drain the goodbye message
 
 #include "config.h"
 #include "config_proto.h"
@@ -421,6 +424,22 @@ static void handle_main(const cfg_io_t *io, char *cmd, char *args, config_t *cfg
       g_apply(cfg); // active profile may have changed
     }
     config_proto_dump(io, cfg);
+  } else if (strcasecmp(cmd, "BOOTSEL") == 0 || strcasecmp(cmd, "REBOOT") == 0) {
+    // Development conveniences: restart without touching the board. BOOTSEL
+    // lands in the UF2 bootloader for reflashing; REBOOT is a plain restart.
+    // (Opening either CDC port at 1200 baud also triggers BOOTSEL.)
+    bool to_bootloader = (toupper((unsigned char)cmd[0]) == 'B');
+    out(io, to_bootloader ? "[*] rebooting to UF2 bootloader...\n" : "[*] rebooting...\n");
+    for (int i = 0; i < 20; i++) { // give USB a moment to drain the goodbye
+      tud_task();
+      busy_wait_ms(2);
+    }
+    if (to_bootloader) {
+      reset_usb_boot(0, 0);
+    } else {
+      watchdog_reboot(0, 0, 0);
+    }
+    while (true) tight_loop_contents(); // unreachable
   } else if (strcasecmp(cmd, "SCAN") == 0) {
     start_scan(io);
   } else if (strcasecmp(cmd, "SAVE") == 0) {
@@ -439,7 +458,7 @@ static void handle_main(const cfg_io_t *io, char *cmd, char *args, config_t *cfg
   } else {
     out(io, "[!] commands: set <ssid|pass|country|debug|key|peer|psk|endpoint|addr|"
             "hostip|dns|keepalive> <val> | list | use <n> | del <n> | scan | save | "
-            "restore\n");
+            "restore | reboot | bootsel\n");
   }
 }
 
