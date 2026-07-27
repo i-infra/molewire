@@ -4,8 +4,9 @@
 #include <stdio.h>
 #include <string.h>
 
-#include <pico/bootrom.h>    // reset_usb_boot for the 1200-baud touch
-#include <pico/cyw43_arch.h> // lwIP lock for the protocol's lwIP/config reads
+#include <hardware/watchdog.h> // disarm before entering the bootloader
+#include <pico/bootrom.h>      // reset_usb_boot for the 1200-baud touch
+#include <pico/cyw43_arch.h>   // lwIP lock for the protocol's lwIP/config reads
 #include <tusb.h>
 
 #include "config.h"
@@ -23,6 +24,10 @@
 void tud_cdc_line_coding_cb(uint8_t itf, cdc_line_coding_t const *coding) {
   (void)itf;
   if (coding->bit_rate == 1200) {
+    // The main-loop watchdog stays armed across reset_usb_boot and would fire
+    // inside the bootloader (the bench firmware works without this only
+    // because it runs no watchdog). Disarm before jumping.
+    watchdog_disable();
     reset_usb_boot(0, 0);
   }
 }

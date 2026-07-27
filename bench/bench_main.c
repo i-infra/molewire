@@ -106,19 +106,21 @@ int main(void) {
     uint64_t us = bench_aead(WG_MTU, AEAD_ITERS);
     uint64_t bytes = (uint64_t)WG_MTU * AEAD_ITERS;
     uint32_t kbps = (uint32_t)(bytes * 8000 / us); // kbit/s
-    uint32_t cpb1420 = (uint32_t)((uint64_t)sys_khz * us / (bytes / 1000));
-    printf("chacha20poly1305 encrypt %u B x%u: %llu us  ->  %lu.%03lu Mbit/s, ~%lu cyc/B\n",
+    // cycles = sys_khz * us / 1000, so milli-cycles-per-byte = sys_khz*us/bytes
+    uint32_t cpb_milli = (uint32_t)((uint64_t)sys_khz * us / bytes);
+    printf("chacha20poly1305 encrypt %u B x%u: %llu us  ->  %lu.%03lu Mbit/s, %lu.%03lu cyc/B\n",
            WG_MTU, AEAD_ITERS, (unsigned long long)us, (unsigned long)(kbps / 1000),
-           (unsigned long)(kbps % 1000), (unsigned long)(cpb1420 / 1000));
+           (unsigned long)(kbps % 1000), (unsigned long)(cpb_milli / 1000),
+           (unsigned long)(cpb_milli % 1000));
 
     us = bench_aead(64, SMALL_ITERS);
     printf("chacha20poly1305 encrypt   64 B x%u: %llu us  ->  %lu pkt/s\n", SMALL_ITERS,
            (unsigned long long)us, (unsigned long)((uint64_t)SMALL_ITERS * 1000000 / us));
 
     us = bench_blake2s(500);
+    uint32_t b2s_kbps = (uint32_t)(500ull * 1024 * 8000 / us);
     printf("blake2s 1 KiB x500: %llu us  ->  %lu.%03lu Mbit/s\n", (unsigned long long)us,
-           (unsigned long)(500ull * 1024 * 8000 / us / 1000000),
-           (unsigned long)((500ull * 1024 * 8000 / us / 1000) % 1000));
+           (unsigned long)(b2s_kbps / 1000), (unsigned long)(b2s_kbps % 1000));
 
     // Handshake path: reference C vs the uNaCl Cortex-M0 assembly.
     static uint8_t out_r[32], out_c[32];

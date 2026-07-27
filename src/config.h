@@ -38,6 +38,9 @@ typedef struct {
   char endpoint[CONFIG_ENDPOINT_MAX]; // server endpoint, IPv4 literal or hostname
   uint16_t endpoint_port;
   uint16_t keepalive;   // persistent-keepalive seconds, 0 = off
+  uint16_t host_mtu;    // MTU handed to the host via DHCP; 0 = the WG MTU (1420).
+                        // Set 1280 when the far side bridges into Tailscale.
+  uint16_t _pad0;       // keep the u32 fields below aligned
   uint32_t addr;        // this device's tunnel address (USB-side gateway)
   uint32_t host_addr;   // the address DHCP leases to the USB host
   uint32_t dns;         // resolver handed to the host (reached through the tunnel)

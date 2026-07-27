@@ -173,6 +173,10 @@ void config_proto_dump(const cfg_io_t *io, const config_t *cfg) {
     snprintf(line, sizeof(line), "    keepalive:  %us\n", w->keepalive);
     out(io, line);
   }
+  if (w->host_mtu) {
+    snprintf(line, sizeof(line), "    host mtu:   %u\n", w->host_mtu);
+    out(io, line);
+  }
   snprintf(line, sizeof(line), "    tunnel state: %s; host lease: %s\n", wg_state_str(),
            dhcp_server_leased() ? "yes" : "no");
   out(io, line);
@@ -374,6 +378,16 @@ static int cmd_set(const cfg_io_t *io, char *args, config_t *cfg) {
     }
     cfg->wg.keepalive = (uint16_t)k;
     return SET_WG;
+  } else if (strcasecmp(args, "mtu") == 0) {
+    // MTU handed to the host over DHCP. Lower it below the WireGuard 1420 when
+    // the far end re-encapsulates (e.g. a Tailscale bridge: set mtu 1280).
+    long m = strtol(val, NULL, 10);
+    if (m != 0 && (m < 576 || m > 1420)) { // ceiling = WIREGUARDIF_MTU
+      out(io, "ERR usage: set mtu <576-1420> (0 = default 1420)\n");
+      return SET_ERR;
+    }
+    cfg->wg.host_mtu = (uint16_t)m;
+    return SET_WG;
   }
   out(io, "ERR unknown key (ssid|pass|country|debug|key|peer|psk|endpoint|addr|"
           "hostip|dns|keepalive)\n");
@@ -435,6 +449,7 @@ static void handle_main(const cfg_io_t *io, char *cmd, char *args, config_t *cfg
       busy_wait_ms(2);
     }
     if (to_bootloader) {
+      watchdog_disable(); // an armed watchdog would fire inside the bootloader
       reset_usb_boot(0, 0);
     } else {
       watchdog_reboot(0, 0, 0);
@@ -457,8 +472,8 @@ static void handle_main(const cfg_io_t *io, char *cmd, char *args, config_t *cfg
     config_proto_dump(io, cfg);
   } else {
     out(io, "[!] commands: set <ssid|pass|country|debug|key|peer|psk|endpoint|addr|"
-            "hostip|dns|keepalive> <val> | list | use <n> | del <n> | scan | save | "
-            "restore | reboot | bootsel\n");
+            "hostip|dns|keepalive|mtu> <val> | list | use <n> | del <n> | scan | "
+            "save | restore | reboot | bootsel\n");
   }
 }
 

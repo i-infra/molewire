@@ -25,6 +25,8 @@
 //   set hostip <a.b.c.d>  the tunnel address DHCP leases to the USB host
 //   set dns <a.b.c.d>     resolver handed to the host (reached via the tunnel)
 //   set keepalive <secs>  persistent keepalive (0 = off)
+//   set mtu <bytes>       MTU handed to the host via DHCP (0 = WG default 1420;
+//                         set 1280 when the server bridges into Tailscale)
 //   list                  list the saved profiles
 //   use <n>               make profile n active and re-associate
 //   del <n>               delete profile n
