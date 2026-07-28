@@ -11,10 +11,16 @@
 #include "config.h"
 #include "wifi_config.h"
 
-// Store the record in the very last 4 KiB sector of flash, clear of the program
-// image (which is linked from the start of flash and is far smaller than the
-// device's flash). XIP_BASE maps flash for reads; offsets are relative to flash.
-#define CONFIG_FLASH_OFFSET (PICO_FLASH_SIZE_BYTES - FLASH_SECTOR_SIZE)
+// Store the record near the end of flash, clear of the program image (which is
+// linked from the start of flash and is far smaller than the device's flash).
+// NOT the last sector: the RP2350 bootrom claims the final 256 bytes of flash
+// as UF2-download scratch (erratum RP2350-E10), erasing that whole sector on
+// every BOOTSEL drag-and-drop. Layout from the top of flash:
+//   -1 sector: reserved (bootrom E10 scratch)
+//   -2 sector: TAI64N boot counter (wg.c)
+//   -3 sector: this config record
+// XIP_BASE maps flash for reads; offsets are relative to flash.
+#define CONFIG_FLASH_OFFSET (PICO_FLASH_SIZE_BYTES - 3 * FLASH_SECTOR_SIZE)
 
 _Static_assert(sizeof(config_t) <= FLASH_SECTOR_SIZE,
                "config_t must fit in one flash sector");

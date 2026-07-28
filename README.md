@@ -75,13 +75,12 @@ The bench firmware honors the 1200-baud reset too (via pico_stdio_usb).
 The device enumerates three USB functions: the network interface plus two
 CDC-ACM serial ports — a management console and a debug console. Open the
 first serial port (e.g. `screen /dev/ttyACM0`) and press Enter for the status
-view. Generate keys on a trusted machine (`wg genkey | tee key | wg pubkey`),
-then:
+view. Then:
 
 ```
 set ssid MyUpstreamNet
 set pass wifi-password
-set key  <device private key, base64>
+genkey
 set peer <server public key, base64>
 set endpoint vpn.example.com 51820
 set addr 10.66.0.249/30
@@ -90,6 +89,13 @@ set dns 10.66.0.1
 set keepalive 25
 save
 ```
+
+`genkey` creates the device's identity from the RP2350 hardware TRNG and
+prints **only the public key** (reprint it anytime with `pubkey`; it also
+appears in the status view) — the private key is written to the config and
+never leaves the device. Give the public key to the WireGuard admin; they hand
+back the address pair and endpoint. To import an identity generated elsewhere
+instead, `set key <private key, base64>`.
 
 `scan` / `join <n>` browse nearby networks; `set psk <key>` adds an optional
 preshared key. Every change applies live. On the server, add the peer with
@@ -113,13 +119,15 @@ unprovisioned; off = USB not ready.
 
 ## Security notes
 
-- WireGuard keys and Wi-Fi credentials are stored **unencrypted** in the last
-  flash sector. Anyone with physical possession can extract them (this is true
-  of nearly all hobby-firmware devices; the RP2350's OTP + secure boot could
-  harden it later). Treat a lost dongle as a compromised peer and rotate keys.
-- The private key transits the management serial console once at provisioning.
-  On-device key generation (`wg genkey` equivalent, printing only the public
-  key) is a planned improvement.
+- WireGuard keys and Wi-Fi credentials are stored **unencrypted** in a flash
+  sector near the top of flash (third from the end — the last sector is
+  scratch space the RP2350 bootrom erases on every UF2 download, erratum
+  RP2350-E10 — so the config now survives reflashing). Anyone with physical
+  possession can extract them (this is true of nearly all hobby-firmware
+  devices; the RP2350's OTP + secure boot could harden it later). Treat a lost
+  dongle as a compromised peer and rotate keys.
+- With `genkey`, the private key is generated on-device from the hardware TRNG
+  and is never printed on any console or included in any status output.
 - IPv4 only, end to end: the USB link runs no IPv6, so there is no v6 side
   channel around the tunnel.
 

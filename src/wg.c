@@ -13,6 +13,7 @@
 #include <pico/rand.h>
 #include <pico/stdlib.h>
 
+#include "crypto.h" // wireguard_x25519 for on-device keypair generation
 #include "usb_net.h"
 #include "wg.h"
 #include "wireguard-platform.h"
@@ -78,11 +79,29 @@ bool wireguard_is_under_load(void) {
   return false; // single peer, we initiate; the cookie-reply path is moot
 }
 
+// --- on-device keypair -----------------------------------------------------------
+
+// The X25519 generator, as in the WireGuard reference implementation.
+static const uint8_t curve_basepoint[32] = {9};
+
+bool wg_keypair_generate(uint8_t pub[32], uint8_t priv[32]) {
+  wireguard_random_bytes(priv, 32); // hardware TRNG via pico_rand
+  priv[0] &= 248;                   // curve25519 clamp
+  priv[31] = (uint8_t)((priv[31] & 127) | 64);
+  return wireguard_x25519(pub, priv, curve_basepoint) == 0;
+}
+
+bool wg_public_from_private(uint8_t pub[32], const uint8_t priv[32]) {
+  return wireguard_x25519(pub, priv, curve_basepoint) == 0;
+}
+
 // TAI64N without NTP. WireGuard's handshake timestamp only has to be strictly
 // increasing as seen by the server, not a real time. A flash-backed boot
 // counter provides the increase across reboots; uptime provides it within one
 // boot. Each boot gets a 2^25-second (~1 year) window, so the value from boot
 // N+1 always exceeds anything boot N could have produced.
+// Second-to-last sector: the last one is erased by the bootrom on every UF2
+// download (RP2350-E10) -- see the flash layout note in config.c.
 #define BOOTCOUNT_MAGIC 0x43424757u // "WGBC"
 #define BOOTCOUNT_FLASH_OFFSET (PICO_FLASH_SIZE_BYTES - 2 * FLASH_SECTOR_SIZE)
 

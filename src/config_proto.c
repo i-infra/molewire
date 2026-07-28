@@ -100,6 +100,22 @@ static bool valid_wg_key(const char *s) {
   return wireguard_base64_decode(s, buf, &len) && len == 32;
 }
 
+// Derive the public key of the stored private key, base64-encoded into out
+// (needs >= 45 bytes). False if no key is set or it does not decode.
+static bool fmt_pubkey(const config_t *cfg, char *pub_b64, size_t n) {
+  uint8_t priv[64], pub[32];
+  size_t len = sizeof(priv);
+  bool ok = cfg->wg.private_key[0] &&
+            wireguard_base64_decode(cfg->wg.private_key, priv, &len) && len == 32 &&
+            wg_public_from_private(pub, priv);
+  memset(priv, 0, sizeof(priv)); // don't leave the private key on the stack
+  if (!ok) {
+    return false;
+  }
+  size_t olen = n;
+  return wireguard_base64_encode(pub, sizeof(pub), pub_b64, &olen);
+}
+
 // Parse "a.b.c.d" into a network-order u32; 0 on failure (0.0.0.0 is not a
 // meaningful value for any of these settings, so it doubles as the error).
 static uint32_t parse_ip4(const char *s) {
@@ -143,8 +159,14 @@ void config_proto_dump(const cfg_io_t *io, const config_t *cfg) {
   out(io, assoc ? "    wifi:       associated\n" : "    wifi:       associating\n");
 
   const wg_config_t *w = &cfg->wg;
-  char a[16], b[16];
-  out(io, w->private_key[0] ? "    wg key:     set\n" : "    wg key:     unset\n");
+  char a[16], b[16], pub[48];
+  if (fmt_pubkey(cfg, pub, sizeof(pub))) {
+    snprintf(line, sizeof(line), "    wg pubkey:  %s\n", pub);
+    out(io, line);
+  } else {
+    out(io, w->private_key[0] ? "    wg key:     set (pubkey underivable?)\n"
+                              : "    wg key:     unset -- genkey, or set key <b64>\n");
+  }
   out(io, w->peer_public[0] ? "    wg peer:    set\n" : "    wg peer:    unset\n");
   out(io, w->psk[0] ? "    wg psk:     set\n" : "    wg psk:     off\n");
   if (w->endpoint[0]) {
@@ -447,7 +469,7 @@ static int cmd_set(const cfg_io_t *io, char *args, config_t *cfg) {
     return SET_WG;
   }
   out(io, "ERR unknown key (ssid|pass|country|debug|key|peer|psk|endpoint|addr|"
-          "hostip|dns|keepalive)\n");
+          "hostip|dns|keepalive|mtu|routes)\n");
   return SET_ERR;
 }
 
@@ -495,6 +517,43 @@ static void handle_main(const cfg_io_t *io, char *cmd, char *args, config_t *cfg
       g_apply(cfg); // active profile may have changed
     }
     config_proto_dump(io, cfg);
+  } else if (strcasecmp(cmd, "GENKEY") == 0) {
+    // Generate the WireGuard identity on-device: the private key goes straight
+    // from the TRNG into the config and is never printed anywhere; only the
+    // public key is shown, which is what the server admin needs.
+    if (cfg->wg.private_key[0] && !(args && strcasecmp(args, "force") == 0)) {
+      out(io, "ERR a private key is already set -- 'genkey force' replaces it\n"
+              "    (the server must then be given the new public key)\n");
+      return;
+    }
+    uint8_t priv[32], pub[32];
+    char b64[48];
+    if (!wg_keypair_generate(pub, priv)) {
+      out(io, "[!] key generation failed\n");
+      return;
+    }
+    size_t olen = CONFIG_WGKEY_MAX;
+    wireguard_base64_encode(priv, sizeof(priv), cfg->wg.private_key, &olen);
+    memset(priv, 0, sizeof(priv));
+    olen = sizeof(b64);
+    wireguard_base64_encode(pub, sizeof(pub), b64, &olen);
+    out(io, "[*] keypair generated on-device; the private key never leaves it\n");
+    out(io, "    public key: ");
+    out(io, b64);
+    out(io, "\n    give this to the WireGuard admin, then `save`\n");
+    if (g_apply_wg) {
+      g_apply_wg(cfg); // restart the tunnel under the new identity
+    }
+    config_proto_dump(io, cfg);
+  } else if (strcasecmp(cmd, "PUBKEY") == 0) {
+    // Reprint the public key alone (script-friendly single line).
+    char b64[48];
+    if (fmt_pubkey(cfg, b64, sizeof(b64))) {
+      out(io, b64);
+      out(io, "\n");
+    } else {
+      out(io, "ERR no usable private key -- genkey (or set key <b64>) first\n");
+    }
   } else if (strcasecmp(cmd, "BOOTSEL") == 0 || strcasecmp(cmd, "REBOOT") == 0) {
     // Development conveniences: restart without touching the board. BOOTSEL
     // lands in the UF2 bootloader for reflashing; REBOOT is a plain restart.
@@ -529,8 +588,8 @@ static void handle_main(const cfg_io_t *io, char *cmd, char *args, config_t *cfg
     config_proto_dump(io, cfg);
   } else {
     out(io, "[!] commands: set <ssid|pass|country|debug|key|peer|psk|endpoint|addr|"
-            "hostip|dns|keepalive|mtu|routes> <val> | list | use <n> | del <n> | "
-            "scan | save | restore | reboot | bootsel\n");
+            "hostip|dns|keepalive|mtu|routes> <val> | genkey [force] | pubkey | "
+            "list | use <n> | del <n> | scan | save | restore | reboot | bootsel\n");
   }
 }
 
