@@ -11,6 +11,7 @@
 
 #include "config.h"
 #include "config_proto.h"
+#include "debug_console.h" // debug_console_line_state (shared CDC callback)
 #include "serial_console.h"
 
 // The CDC-ACM management console is the only CDC-ACM instance (the network
@@ -32,10 +33,15 @@ void tud_cdc_line_coding_cb(uint8_t itf, cdc_line_coding_t const *coding) {
   }
 }
 
+#ifndef FW_VERSION
+#define FW_VERSION "0.0.0-dev"
+#endif
+
 static config_t *g_cfg;
 static char line_buf[192];
 static uint16_t line_len;
 static bool was_connected; // DTR edge: greet once when a terminal attaches
+static bool banner_sent;   // identification banner for this port-open session
 
 // --- output -------------------------------------------------------------------
 
@@ -78,6 +84,38 @@ static void console_emit(const char *s) {
 static void console_io_write(void *ctx, const char *s) {
   (void)ctx;
   console_emit(s);
+}
+
+// Identification banner, pushed into the TX FIFO unconditionally -- even with
+// DTR never asserted -- so any tool that opens the port (e.g. something
+// probing serial devices for a GDB server) reads spontaneous ASCII on its
+// first read and can classify this as not-its-protocol immediately, instead
+// of seeing only its own bytes echoed back. Sent once per port-open session:
+// on any control-line activity, or before the first echoed byte as fallback.
+static void console_banner(void) {
+  static const char banner[] =
+      "\r\npico-wg-dongle " FW_VERSION " -- WireGuard USB dongle configuration console\r\n"
+      "params: ssid pass country debug key peer psk endpoint addr hostip dns "
+      "keepalive mtu routes (set <param> <val>); genkey pubkey list use del scan "
+      "save restore reboot bootsel; Enter for status\r\n";
+  console_put(banner, sizeof(banner) - 1);
+  banner_sent = true;
+}
+
+// Host opened/closed the port (SET_CONTROL_LINE_STATE). Identify ourselves on
+// any opening activity; a fully dropped line state marks the session closed so
+// the next opener is greeted again. The management console is CDC 0; the
+// debug console (CDC 1) gets the same treatment in debug_console.c.
+void tud_cdc_line_state_cb(uint8_t itf, bool dtr, bool rts) {
+  if (itf != CONSOLE_ITF) {
+    debug_console_line_state(itf, dtr, rts);
+    return;
+  }
+  if (!dtr && !rts) {
+    banner_sent = false;
+  } else if (!banner_sent) {
+    console_banner();
+  }
 }
 
 // The interactive prompt, shown after each reply so the user has a cursor. The
@@ -123,8 +161,16 @@ void serial_console_task(void) {
     // Terminal dropped: leave any scan/live mode so the device resumes normal
     // operation (and re-associates) without waiting for a key that cannot come.
     config_proto_reset();
+    banner_sent = false;
   }
   was_connected = connected;
+
+  // Fallback identification: bytes arriving on a session that never produced
+  // control-line activity (a prober blind-writing its protocol) still get the
+  // banner before anything is echoed.
+  if (!banner_sent && tud_cdc_n_available(CONSOLE_ITF)) {
+    console_banner();
+  }
 
   // Drive a pending network scan: when it finishes, the protocol prints the
   // results and a new prompt. Runs under the lwIP lock like the command path,

@@ -12,6 +12,12 @@
 // The debug console is the second CDC-ACM instance (the management console is 0).
 #define DEBUG_ITF 1
 
+#ifndef FW_VERSION
+#define FW_VERSION "0.0.0-dev"
+#endif
+
+static bool banner_sent; // identification banner for this port-open session
+
 static void put(const char *buf, size_t len) {
   size_t off = 0;
   for (int tries = 0; off < len && tries < 16; tries++) {
@@ -49,9 +55,36 @@ void debug_printf(const char *fmt, ...) {
   put(out, m);
 }
 
+// Identification banner (see console_banner in serial_console.c for why this
+// is sent without waiting for DTR): a port-probing tool that opens this
+// otherwise-silent, input-discarding port would get nothing at all back.
+static void debug_banner(void) {
+  static const char banner[] = "\r\npico-wg-dongle " FW_VERSION
+                               " -- debug console (read-only diagnostics stream; "
+                               "configuration is on the other CDC port)\r\n";
+  put(banner, sizeof(banner) - 1);
+  banner_sent = true;
+}
+
+// Dispatched from tud_cdc_line_state_cb in serial_console.c (TinyUSB has one
+// callback for all CDC instances).
+void debug_console_line_state(uint8_t itf, bool dtr, bool rts) {
+  if (itf != DEBUG_ITF) {
+    return;
+  }
+  if (!dtr && !rts) {
+    banner_sent = false;
+  } else if (!banner_sent) {
+    debug_banner();
+  }
+}
+
 void debug_console_task(void) {
   // Write-only channel: drain and discard any bytes the host sends so its TX
-  // buffer never stalls.
+  // buffer never stalls. A blind-writing prober still gets identified first.
+  if (!banner_sent && tud_cdc_n_available(DEBUG_ITF)) {
+    debug_banner();
+  }
   while (tud_cdc_n_available(DEBUG_ITF)) {
     uint8_t scratch[64];
     if (tud_cdc_n_read(DEBUG_ITF, scratch, sizeof(scratch)) == 0) {
