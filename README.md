@@ -72,6 +72,33 @@ The bench firmware honors the 1200-baud reset too (via pico_stdio_usb).
 
 ## Provisioning
 
+### The portal (the easy way)
+
+Plug the dongle in and browse to **http://pico-wg.local** — a configuration
+and status page served by the device itself (Chromium-family browsers on
+macOS/Linux even prompt "Go to pico-wg.local" at plug-in, via a WebUSB
+landing-page descriptor). Fill in Wi-Fi and WireGuard settings, press
+*generate keypair*, give the shown public key to your WireGuard admin, enter
+the address pair and endpoint they hand back, *apply*, *save*. The page also
+shows live status (tunnel state, lease, USB counters) and has a console box
+that accepts every serial-console command.
+
+Reachability is engineered to survive any config state:
+
+- The USB link always carries an IPv6 **link-local** address (the portal's
+  permanent home), and an mDNS responder answers `pico-wg.local` (A + AAAA) on
+  the USB link only — no host DNS or routing configuration is touched, ever.
+- Unprovisioned, the device additionally leases the host `172.31.255.2/30`
+  with **no router, no routes, no DNS** (a bring-up island): the portal is
+  also at `http://172.31.255.1/` and the host's own connectivity is
+  unaffected. Once provisioned, the island is replaced by the tunnel
+  addressing; `pico-wg.local` follows automatically.
+- The portal is refused to connections arriving from anywhere but the USB
+  link (same trust boundary as the serial console), and the private key is
+  never included in any page, API response, or console output.
+
+### The serial console
+
 The device enumerates three USB functions: the network interface plus two
 CDC-ACM serial ports — a management console and a debug console. Open the
 first serial port (e.g. `screen /dev/ttyACM0`) and press Enter for the status
@@ -128,8 +155,11 @@ unprovisioned; off = USB not ready.
   dongle as a compromised peer and rotate keys.
 - With `genkey`, the private key is generated on-device from the hardware TRNG
   and is never printed on any console or included in any status output.
-- IPv4 only, end to end: the USB link runs no IPv6, so there is no v6 side
-  channel around the tunnel.
+- IPv6 exists **only** as link-local on the USB link (it is the portal's
+  stable address) and is deliberately unroutable: the Wi-Fi station netif has
+  its auto-created v6 address stripped and SLAAC disabled, and v6 forwarding
+  is off — so there is still no v6 side channel around the (v4) tunnel; v6
+  packets can reach the device itself and nothing beyond.
 
 ## Performance expectations
 
