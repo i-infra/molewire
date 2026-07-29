@@ -57,6 +57,7 @@ static uint32_t lease_dns;   // network order (0 = omit option 6)
 static uint16_t lease_mtu;
 static wg_route_t lease_routes[CONFIG_ROUTES_MAX];
 static uint8_t lease_route_count; // 0 = full-gateway mode
+static bool lease_link_only;      // bring-up island: no router, no routes
 static volatile bool leased;
 
 // Find option `code` in the options block; returns pointer to its length byte
@@ -150,7 +151,11 @@ static void dhcp_recv(void *arg, struct udp_pcb *upcb, struct pbuf *p,
     uint32_t lease_be = lwip_htonl(LEASE_TIME_S);
     o = put_opt(o, OPT_LEASE_TIME, &lease_be, 4);
     o = put_opt(o, OPT_SUBNET_MASK, &lease_mask, 4);
-    if (lease_route_count == 0) {
+    if (lease_link_only) {
+      // Bring-up island: the host gets on-link reachability to the device (the
+      // config portal) from the subnet mask alone -- no router, no static
+      // routes, no DNS. Its own default route and resolver are untouched.
+    } else if (lease_route_count == 0) {
       // Full-gateway mode: the Pico is the host's default router.
       o = put_opt(o, OPT_ROUTER, &sid, 4);
     } else {
@@ -192,11 +197,12 @@ static void dhcp_recv(void *arg, struct udp_pcb *upcb, struct pbuf *p,
 
 void dhcp_server_start(struct netif *nif, uint32_t host_addr, uint8_t prefix,
                        uint32_t dns, uint16_t mtu, const wg_route_t *routes,
-                       uint8_t route_count) {
+                       uint8_t route_count, bool link_only) {
   usb_nif = nif;
   lease_addr = host_addr;
   lease_mask = prefix ? lwip_htonl(0xFFFFFFFFu << (32 - prefix)) : 0;
-  lease_dns = dns;
+  lease_link_only = link_only;
+  lease_dns = link_only ? 0 : dns;
   lease_mtu = mtu;
   lease_route_count = (uint8_t)(route_count > CONFIG_ROUTES_MAX ? CONFIG_ROUTES_MAX : route_count);
   if (routes && lease_route_count) {

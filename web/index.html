@@ -1,0 +1,234 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>pico-wg-dongle</title>
+<style>
+:root{--bg:#0d1117;--card:#161b22;--line:#30363d;--fg:#e6edf3;--dim:#8b949e;
+--ok:#3fb950;--warn:#d29922;--bad:#f85149;--acc:#58a6ff;font-size:15px}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);
+font:1rem/1.45 ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif}
+main{max-width:640px;margin:0 auto;padding:1rem}
+h1{font-size:1.15rem;margin:.3rem 0 1rem;display:flex;align-items:center;gap:.6rem}
+h1 small{color:var(--dim);font-weight:400;font-size:.75rem}
+.card{background:var(--card);border:1px solid var(--line);border-radius:8px;
+padding: .9rem 1rem;margin-bottom:1rem}
+.card h2{font-size:.8rem;text-transform:uppercase;letter-spacing:.06em;
+color:var(--dim);margin:0 0 .6rem}
+.pill{display:inline-block;padding:.1rem .55rem;border-radius:99px;
+font-size:.75rem;border:1px solid var(--line);color:var(--dim)}
+.pill.ok{color:var(--ok);border-color:var(--ok)}
+.pill.warn{color:var(--warn);border-color:var(--warn)}
+.pill.bad{color:var(--bad);border-color:var(--bad)}
+dl{display:grid;grid-template-columns:auto 1fr;gap:.15rem .8rem;margin:0}
+dt{color:var(--dim);white-space:nowrap}
+dd{margin:0;overflow-wrap:anywhere}
+code,.mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:.85em}
+.key{display:flex;gap:.5rem;align-items:center}
+.key code{flex:1;background:var(--bg);padding:.3rem .5rem;border-radius:6px;
+border:1px solid var(--line);overflow-wrap:anywhere}
+button{background:#21262d;color:var(--fg);border:1px solid var(--line);
+border-radius:6px;padding:.35rem .8rem;font-size:.85rem;cursor:pointer}
+button:hover{border-color:var(--dim)}
+button.primary{background:#1f6feb;border-color:#1f6feb;color:#fff}
+label{display:block;color:var(--dim);font-size:.8rem;margin:.55rem 0 .15rem}
+input{width:100%;background:var(--bg);color:var(--fg);border:1px solid var(--line);
+border-radius:6px;padding:.4rem .55rem;font-size:.9rem}
+input:focus{outline:none;border-color:var(--acc)}
+.row{display:flex;gap:.6rem}.row>div{flex:1}
+#log{background:var(--bg);border:1px solid var(--line);border-radius:6px;
+padding:.5rem .6rem;min-height:3rem;max-height:14rem;overflow:auto;
+white-space:pre-wrap;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;
+font-size:.75rem;color:var(--dim)}
+#cmdline{font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+.actions{display:flex;gap:.6rem;margin-top:.8rem;flex-wrap:wrap}
+.offline{opacity:.5}
+</style>
+</head>
+<body>
+<main>
+<h1>pico-wg-dongle <span id="tunnel" class="pill">…</span>
+<small id="version"></small></h1>
+
+<div class="card" id="statuscard">
+<h2>Status</h2>
+<dl>
+<dt>Wi-Fi</dt><dd><span id="wifi">…</span></dd>
+<dt>Tunnel</dt><dd><span id="wg">…</span></dd>
+<dt>Host lease</dt><dd><span id="lease">…</span></dd>
+<dt>USB frames</dt><dd class="mono" id="usb">…</dd>
+<dt>Uptime</dt><dd id="uptime">…</dd>
+</dl>
+</div>
+
+<div class="card">
+<h2>Device identity</h2>
+<div class="key"><code id="pubkey">(no key)</code>
+<button id="copykey" title="copy">copy</button></div>
+<div class="actions">
+<button id="genkey">generate keypair</button>
+</div>
+<p style="color:var(--dim);font-size:.8rem;margin:.6rem 0 0">
+The private key is generated on the device and never leaves it. Give the
+public key above to your WireGuard admin; they hand back an address pair and
+endpoint.</p>
+</div>
+
+<div class="card">
+<h2>Wi-Fi</h2>
+<div class="row">
+<div><label for="f_ssid">SSID</label><input id="f_ssid" autocomplete="off"></div>
+<div><label for="f_pass">Password</label><input id="f_pass" type="password"
+autocomplete="off"></div>
+</div>
+<div class="actions"><button id="setwifi">apply Wi-Fi</button></div>
+</div>
+
+<div class="card">
+<h2>WireGuard</h2>
+<label for="f_peer">Server public key</label>
+<input id="f_peer" class="mono" autocomplete="off">
+<label for="f_psk">Preshared key (optional)</label>
+<input id="f_psk" class="mono" autocomplete="off" placeholder="off">
+<div class="row">
+<div><label for="f_ep">Endpoint host</label><input id="f_ep" autocomplete="off"></div>
+<div style="flex:0 0 7rem"><label for="f_port">Port</label>
+<input id="f_port" inputmode="numeric" placeholder="51820"></div>
+</div>
+<div class="row">
+<div><label for="f_addr">Device address (CIDR)</label>
+<input id="f_addr" class="mono" placeholder="10.66.0.249/30"></div>
+<div><label for="f_hostip">Host address</label>
+<input id="f_hostip" class="mono" placeholder="10.66.0.250"></div>
+</div>
+<div class="row">
+<div><label for="f_dns">DNS (or off)</label><input id="f_dns" class="mono"></div>
+<div><label for="f_mtu">MTU (0 = 1420)</label><input id="f_mtu" inputmode="numeric"></div>
+<div><label for="f_ka">Keepalive s</label><input id="f_ka" inputmode="numeric"
+placeholder="25"></div>
+</div>
+<label for="f_routes">Split-tunnel routes (comma CIDRs, or off for full gateway)</label>
+<input id="f_routes" class="mono" placeholder="10.66.0.0/24,100.64.0.0/10">
+<div class="actions">
+<button id="apply" class="primary">apply</button>
+<button id="save">save to flash</button>
+</div>
+</div>
+
+<div class="card">
+<h2>Console</h2>
+<div id="log"></div>
+<div class="row" style="margin-top:.6rem">
+<div><input id="cmdline" placeholder="console command… (e.g. help, save, reboot)"></div>
+<div style="flex:0 0 5rem"><button id="send" style="width:100%">send</button></div>
+</div>
+</div>
+</main>
+<script>
+"use strict";
+const $=id=>document.getElementById(id);
+let filled=false, offlineSince=0;
+
+function fmtUp(s){const d=Math.floor(s/86400),h=Math.floor(s%86400/3600),
+m=Math.floor(s%3600/60);return (d?d+"d ":"")+(h?h+"h ":"")+m+"m"}
+
+function pill(el,txt,cls){el.textContent=txt;el.className="pill"+(cls?" "+cls:"")}
+
+async function poll(){
+try{
+const r=await fetch("/api/status",{cache:"no-store"});
+const j=await r.json();
+document.body.classList.remove("offline");offlineSince=0;
+$("version").textContent=j.version;
+pill($("tunnel"),j.wg.state,
+j.wg.state==="up"?"ok":j.provisioned?"warn":"bad");
+$("wifi").textContent=j.wifi.ssid?
+`${j.wifi.ssid} — ${j.wifi.link?"associated ("+j.wifi.ip+")":"associating…"}`:
+"not configured";
+$("wg").textContent=j.provisioned?
+`${j.wg.state} — ${j.wg.endpoint}:${j.wg.port}, ${j.wg.addr}/${j.wg.prefix}`+
+(j.wg.routes.length?` (split: ${j.wg.routes.join(", ")})`:" (gateway mode)"):
+"not provisioned — fill in the forms below";
+$("lease").textContent=j.leased?"active ("+j.wg.hostip+")":"waiting for host DHCP";
+$("usb").textContent=`in ${j.usb.from_host}  out ${j.usb.to_host}`+
+(j.usb.txdrop?`  drop ${j.usb.txdrop}`:"");
+$("uptime").textContent=fmtUp(j.uptime_s);
+$("pubkey").textContent=j.wg.pubkey||"(no key — generate one)";
+if(!filled){filled=true;
+$("f_ssid").value=j.wifi.ssid||"";
+$("f_ep").value=j.wg.endpoint||"";
+$("f_port").value=j.wg.port||"";
+$("f_addr").value=j.wg.addr?j.wg.addr+"/"+j.wg.prefix:"";
+$("f_hostip").value=j.wg.hostip||"";
+$("f_dns").value=j.wg.dns||"";
+$("f_mtu").value=j.wg.mtu||"";
+$("f_ka").value=j.wg.keepalive||"";
+$("f_routes").value=j.wg.routes.join(",");}
+}catch(e){
+if(!offlineSince)offlineSince=Date.now();
+document.body.classList.add("offline");
+// Re-addressing after provisioning drops v4 connections; the page itself
+// keeps working over pico-wg.local / v6. Just keep polling.
+}
+}
+
+function log(t){const el=$("log");el.textContent+=t.endsWith("\n")?t:t+"\n";
+el.scrollTop=el.scrollHeight}
+
+async function cmd(line){
+log("# "+line);
+try{
+const r=await fetch("/api/cmd",{method:"POST",
+headers:{"Content-Type":"text/plain"},body:line});
+const t=await r.text();
+log(t.trim()||"(ok)");filled=false;poll();
+return t;
+}catch(e){log("(no reply — device re-addressing or rebooting; reconnecting…)");
+return""}
+}
+
+async function cmds(lines){for(const l of lines)if(l)await cmd(l)}
+
+$("send").onclick=()=>{const l=$("cmdline").value.trim();
+if(l){cmd(l);$("cmdline").value=""}};
+$("cmdline").addEventListener("keydown",e=>{if(e.key==="Enter")$("send").onclick()});
+
+$("copykey").onclick=async()=>{
+try{await navigator.clipboard.writeText($("pubkey").textContent);
+$("copykey").textContent="copied";setTimeout(()=>$("copykey").textContent="copy",1200)}
+catch(e){log("clipboard unavailable — select the key text manually")}};
+
+$("genkey").onclick=async()=>{
+const t=await cmd("genkey");
+if(t.includes("already set")&&
+confirm("A key already exists. Replace it? The server must then be updated "+
+"with the new public key."))await cmd("genkey force")};
+
+$("setwifi").onclick=()=>{
+const s=$("f_ssid").value.trim(),p=$("f_pass").value;
+if(!s){log("(ssid empty)");return}
+cmds(["set ssid "+s, p?"set pass "+p:""])};
+
+$("apply").onclick=()=>{
+const L=[];
+const v=id=>$(id).value.trim();
+if(v("f_peer"))L.push("set peer "+v("f_peer"));
+if(v("f_psk"))L.push("set psk "+v("f_psk"));
+if(v("f_ep")&&v("f_port"))L.push("set endpoint "+v("f_ep")+" "+v("f_port"));
+if(v("f_addr"))L.push("set addr "+v("f_addr"));
+if(v("f_hostip"))L.push("set hostip "+v("f_hostip"));
+if(v("f_dns"))L.push("set dns "+v("f_dns"));
+if(v("f_mtu"))L.push("set mtu "+v("f_mtu"));
+if(v("f_ka"))L.push("set keepalive "+v("f_ka"));
+if(v("f_routes"))L.push("set routes "+v("f_routes"));
+if(!L.length){log("(nothing to apply)");return}
+cmds(L)};
+
+$("save").onclick=()=>cmd("save");
+
+poll();setInterval(poll,2000);
+</script>
+</body>
+</html>

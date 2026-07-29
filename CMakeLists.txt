@@ -38,6 +38,7 @@ add_executable(pico-wg-dongle
     src/usb_net.c
     src/dhcp_server.c
     src/wg.c
+    src/http_portal.c
     src/usb_descriptors.c
     wireguard/wireguard.c
     wireguard/wireguardif.c
@@ -65,6 +66,21 @@ endif()
 message(STATUS "Firmware version: ${FW_VERSION}")
 target_compile_definitions(pico-wg-dongle PRIVATE FW_VERSION="${FW_VERSION}")
 
+# The config portal page, gzipped into a generated header.
+find_package(Python3 REQUIRED COMPONENTS Interpreter)
+set(WEB_PAGE_H ${CMAKE_CURRENT_BINARY_DIR}/generated/web_page.h)
+add_custom_command(
+    OUTPUT ${WEB_PAGE_H}
+    COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_CURRENT_BINARY_DIR}/generated
+    COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_LIST_DIR}/tools/gen_web_page.py
+            ${CMAKE_CURRENT_LIST_DIR}/web/index.html ${WEB_PAGE_H}
+    DEPENDS ${CMAKE_CURRENT_LIST_DIR}/web/index.html
+            ${CMAKE_CURRENT_LIST_DIR}/tools/gen_web_page.py
+    COMMENT "Gzipping portal page"
+)
+add_custom_target(web_page DEPENDS ${WEB_PAGE_H})
+add_dependencies(pico-wg-dongle web_page)
+
 pico_set_program_name(pico-wg-dongle "pico-wg-dongle")
 pico_set_program_version(pico-wg-dongle "${FW_VERSION}")
 
@@ -75,6 +91,7 @@ target_link_libraries(pico-wg-dongle
     pico_stdlib
     tinyusb_device
     pico_cyw43_arch_lwip_threadsafe_background   # Wi-Fi serviced in background IRQ so USB (tud_task) never starves
+    pico_lwip_mdns      # mDNS responder: pico-wg.local on the USB link
     pico_unique_id
     pico_rand           # TRNG-backed randomness for WireGuard session keys
     pico_flash          # flash_safe_execute() for config + boot counter
@@ -85,6 +102,7 @@ target_link_libraries(pico-wg-dongle
 target_include_directories(pico-wg-dongle PRIVATE
     ${CMAKE_CURRENT_LIST_DIR}/src       # project headers, tusb_config.h, lwipopts.h, lwip_hooks.h
     ${CMAKE_CURRENT_LIST_DIR}/wireguard # wireguardif.h, wireguard.h, crypto
+    ${CMAKE_CURRENT_BINARY_DIR}/generated # web_page.h (gzipped portal page)
 )
 
 pico_add_extra_outputs(pico-wg-dongle)

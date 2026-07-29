@@ -8,6 +8,7 @@
 
 #include <hardware/sync.h>
 #include <lwip/etharp.h>
+#include <lwip/ethip6.h>
 #include <lwip/netif.h>
 #include <lwip/pbuf.h>
 #include <netif/ethernet.h>
@@ -108,9 +109,19 @@ static err_t usb_netif_init_cb(struct netif *n) {
   n->hwaddr_len = 6;
   memcpy(n->hwaddr, tud_network_mac_address, 6);
   n->hwaddr[5] ^= 0x01; // distinct from the host's MAC on the same link
-  n->flags = NETIF_FLAG_BROADCAST | NETIF_FLAG_ETHARP | NETIF_FLAG_ETHERNET;
+  // IGMP flag so ip4_input accepts joined multicast (mDNS); no mac filter
+  // function is installed since the host's NCM frames all reach us anyway.
+  n->flags = NETIF_FLAG_BROADCAST | NETIF_FLAG_ETHARP | NETIF_FLAG_ETHERNET |
+             NETIF_FLAG_IGMP;
   n->output = etharp_output;
   n->linkoutput = usb_linkoutput;
+#if LWIP_IPV6
+  // v6 link-local rides the USB link so the portal has an address that never
+  // changes across v4 re-provisioning. No MAC filter: the host's NCM frames
+  // all reach us anyway, so multicast (ND, MLD, mDNS) needs no opt-in.
+  n->output_ip6 = ethip6_output;
+  n->flags |= NETIF_FLAG_MLD6;
+#endif
   return ERR_OK;
 }
 
@@ -303,6 +314,10 @@ bool usb_net_init(uint32_t addr_be, uint8_t prefix) {
   netif_add(&usb_netif, &ip, &mask, &gw, NULL, usb_netif_init_cb, ethernet_input);
   netif_set_up(&usb_netif);
   netif_set_link_up(&usb_netif);
+#if LWIP_IPV6
+  // fe80::... from the MAC (EUI-48 form). Stable for the life of the device.
+  netif_create_ip6_linklocal_address(&usb_netif, 1);
+#endif
   cyw43_arch_lwip_end();
   return true;
 }

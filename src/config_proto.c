@@ -102,7 +102,7 @@ static bool valid_wg_key(const char *s) {
 
 // Derive the public key of the stored private key, base64-encoded into out
 // (needs >= 45 bytes). False if no key is set or it does not decode.
-static bool fmt_pubkey(const config_t *cfg, char *pub_b64, size_t n) {
+bool config_proto_pubkey(const config_t *cfg, char *pub_b64, size_t n) {
   uint8_t priv[64], pub[32];
   size_t len = sizeof(priv);
   bool ok = cfg->wg.private_key[0] &&
@@ -160,7 +160,7 @@ void config_proto_dump(const cfg_io_t *io, const config_t *cfg) {
 
   const wg_config_t *w = &cfg->wg;
   char a[16], b[16], pub[48];
-  if (fmt_pubkey(cfg, pub, sizeof(pub))) {
+  if (config_proto_pubkey(cfg, pub, sizeof(pub))) {
     snprintf(line, sizeof(line), "    wg pubkey:  %s\n", pub);
     out(io, line);
   } else {
@@ -548,7 +548,7 @@ static void handle_main(const cfg_io_t *io, char *cmd, char *args, config_t *cfg
   } else if (strcasecmp(cmd, "PUBKEY") == 0) {
     // Reprint the public key alone (script-friendly single line).
     char b64[48];
-    if (fmt_pubkey(cfg, b64, sizeof(b64))) {
+    if (config_proto_pubkey(cfg, b64, sizeof(b64))) {
       out(io, b64);
       out(io, "\n");
     } else {

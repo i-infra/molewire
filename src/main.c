@@ -23,15 +23,30 @@
 #include <pico/cyw43_arch.h>
 #include <pico/stdlib.h>
 
+#include <lwip/apps/mdns.h>
+
 #include "config.h"
 #include "config_proto.h"
 #include "debug_console.h"
 #include "dhcp_server.h"
+#include "http_portal.h"
 #include "serial_console.h"
 #include "usb_net.h"
 #include "wg.h"
 #include "wifi_scan.h"
 #include "wireguardif.h" // WIREGUARDIF_MTU for the DHCP option
+
+// Bring-up island addressing, used while the WireGuard config is incomplete:
+// the host is leased on-link reachability to the portal and nothing more (no
+// router/routes/DNS -- see dhcp_server.h). An address pair at the top of
+// 172.16/12 to make collision with a real LAN unlikely; once provisioned, the
+// link is re-addressed with the tunnel pair and this subnet disappears.
+#define BRINGUP_DEV_ADDR PP_HTONL(0xAC1FFF01u)  // 172.31.255.1
+#define BRINGUP_HOST_ADDR PP_HTONL(0xAC1FFF02u) // 172.31.255.2
+#define BRINGUP_PREFIX 30
+
+// The mDNS hostname: the portal is http://pico-wg.local in every device state.
+#define MDNS_HOSTNAME "pico-wg"
 
 // Watchdog timeout. If the main loop stops feeding the watchdog for this long,
 // the chip resets and USB re-enumerates instead of needing a physical replug.
@@ -98,16 +113,30 @@ static void apply_wifi(const config_t *cfg) {
 }
 
 // Apply WireGuard/addressing config immediately: re-address the USB link,
-// restart the DHCP server, and re-create the tunnel.
+// restart the DHCP server, and re-create the tunnel. An incomplete WireGuard
+// config gets the bring-up island instead, so the portal is reachable at a
+// known v4 address out of the box. Either way the v6 link-local address (and
+// with it http://pico-wg.local) is untouched -- the portal never moves.
 static void apply_wg(const config_t *cfg) {
-  usb_net_set_addr(cfg->wg.addr, cfg->wg.prefix);
-  dhcp_server_start(usb_net_netif(), cfg->wg.host_addr, cfg->wg.prefix, cfg->wg.dns,
-                    cfg->wg.host_mtu ? cfg->wg.host_mtu : WIREGUARDIF_MTU, cfg->wg.routes,
-                    cfg->wg.route_count);
-  // MSS clamp = configured path MTU minus IP+TCP headers, so TCP fits even
-  // when the host ignores/rejects the DHCP MTU (macOS floors at 1280).
-  usb_net_set_mss_clamp(cfg->wg.host_mtu ? (uint16_t)(cfg->wg.host_mtu - 40) : 0);
+  if (config_wg_complete(cfg)) {
+    usb_net_set_addr(cfg->wg.addr, cfg->wg.prefix);
+    dhcp_server_start(usb_net_netif(), cfg->wg.host_addr, cfg->wg.prefix, cfg->wg.dns,
+                      cfg->wg.host_mtu ? cfg->wg.host_mtu : WIREGUARDIF_MTU, cfg->wg.routes,
+                      cfg->wg.route_count, false);
+    // MSS clamp = configured path MTU minus IP+TCP headers, so TCP fits even
+    // when the host ignores/rejects the DHCP MTU (macOS floors at 1280).
+    usb_net_set_mss_clamp(cfg->wg.host_mtu ? (uint16_t)(cfg->wg.host_mtu - 40) : 0);
+  } else {
+    usb_net_set_addr(BRINGUP_DEV_ADDR, BRINGUP_PREFIX);
+    dhcp_server_start(usb_net_netif(), BRINGUP_HOST_ADDR, BRINGUP_PREFIX, 0, 1500, NULL, 0,
+                      true);
+    usb_net_set_mss_clamp(0);
+  }
   wg_apply(cfg, &cyw43_state.netif[CYW43_ITF_STA]);
+  // Re-announce so hosts' mDNS caches follow the v4 re-addressing.
+  cyw43_arch_lwip_begin();
+  mdns_resp_announce(usb_net_netif());
+  cyw43_arch_lwip_end();
 }
 
 // Free RAM: heap region minus what malloc holds out (debug console gauge).
@@ -163,16 +192,29 @@ int main(void) {
   cyw43_arch_enable_sta_mode();
   struct netif *sta = &cyw43_state.netif[CYW43_ITF_STA];
 
-  // USB side: CDC-NCM netif addressed from the WireGuard config (address-less
-  // until provisioned), DHCP server offering the host its tunnel address.
+  // The cyw43 glue gives the station netif a v6 link-local address and enables
+  // SLAAC. Strip both: v6 belongs to the USB link only -- the Wi-Fi side must
+  // never acquire an address the tunnel doesn't cover (see lwipopts.h).
+  netif_set_ip6_autoconfig_enabled(sta, 0);
+  netif_ip6_addr_set_state(sta, 0, IP6_ADDR_INVALID);
+
+  // USB side: CDC-NCM netif; addressing (tunnel pair or bring-up island) is
+  // applied by apply_wg below. v6 link-local comes up inside usb_net_init.
   if (!usb_net_init(cfg.wg.addr, cfg.wg.prefix)) {
     printf("failed to start usb network\n");
     return -1;
   }
-  dhcp_server_start(usb_net_netif(), cfg.wg.host_addr, cfg.wg.prefix, cfg.wg.dns,
-                    cfg.wg.host_mtu ? cfg.wg.host_mtu : WIREGUARDIF_MTU, cfg.wg.routes,
-                    cfg.wg.route_count);
 
+  // pico-wg.local -> the portal, in every provisioning state, plus a
+  // _http._tcp service record so it shows up in Bonjour browsing.
+  cyw43_arch_lwip_begin();
+  mdns_resp_init();
+  mdns_resp_add_netif(usb_net_netif(), MDNS_HOSTNAME);
+  mdns_resp_add_service(usb_net_netif(), "pico-wg portal", "_http", DNSSD_PROTO_TCP, 80,
+                        NULL, NULL);
+  cyw43_arch_lwip_end();
+
+  http_portal_init(&cfg);
   serial_console_init(&cfg);
   config_proto_set_apply(apply_wifi);
   config_proto_set_apply_wg(apply_wg);
@@ -185,7 +227,7 @@ int main(void) {
                                   active_auth(&cfg));
   }
 
-  wg_apply(&cfg, sta);
+  apply_wg(&cfg);
   printf("setup complete\n");
 
   watchdog_enable(WDT_TIMEOUT_MS, true);

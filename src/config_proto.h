@@ -99,4 +99,8 @@ void config_proto_contscan_stop(const cfg_io_t *io, config_t *cfg);
 // Print the full device state: settings plus live association and host address.
 void config_proto_dump(const cfg_io_t *io, const config_t *cfg);
 
+// Derive the public key of the stored private key, base64 into out (>= 45
+// bytes). False if no key is set or it does not decode. (~14 ms of X25519.)
+bool config_proto_pubkey(const config_t *cfg, char *out, size_t n);
+
 #endif // CONFIG_PROTO_H

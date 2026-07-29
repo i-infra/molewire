@@ -78,7 +78,9 @@ enum {
 tusb_desc_device_t const desc_device = {
   .bLength = sizeof(tusb_desc_device_t),
   .bDescriptorType = TUSB_DESC_DEVICE,
-  .bcdUSB = 0x0110, // USB 1.1
+  // 2.10 so hosts read the BOS descriptor (they only do for bcdUSB >= 2.01):
+  // it carries the WebUSB landing page AND the MS OS 2.0 WINNCM binding.
+  .bcdUSB = 0x0210,
   // Use Interface Association Descriptor (IAD) device class
   .bDeviceClass = TUSB_CLASS_MISC,
   .bDeviceSubClass = MISC_SUBCLASS_COMMON,
@@ -234,17 +236,37 @@ https://developers.google.com/web/fundamentals/native-hardware/build-for-webusb/
 (Section Microsoft OS compatibility descriptors)
 */
 
-#define BOS_TOTAL_LEN (TUD_BOS_DESC_LEN + TUD_BOS_MICROSOFT_OS_DESC_LEN)
+#define BOS_TOTAL_LEN (TUD_BOS_DESC_LEN + TUD_BOS_WEBUSB_DESC_LEN + TUD_BOS_MICROSOFT_OS_DESC_LEN)
 
 #define MS_OS_20_DESC_LEN 0xB2
+
+// Vendor control request codes carried in the BOS platform capabilities.
+enum {
+  VENDOR_REQUEST_MICROSOFT = 1, // MS OS 2.0 descriptor set (WINNCM binding)
+  VENDOR_REQUEST_WEBUSB = 2,    // WebUSB GET_URL (landing page)
+};
+
+// WebUSB landing page: Chromium-family browsers on macOS/Linux/ChromeOS show a
+// "Go to pico-wg.local to connect" notification when the dongle is plugged in
+// (disabled on Windows, crbug 656702; Safari/Firefox have no WebUSB). The
+// descriptor alone drives the prompt -- no WebUSB endpoints are implemented.
+static const tusb_desc_webusb_url_t desc_webusb_url = {
+  .bLength = 3 + sizeof("pico-wg.local") - 1,
+  .bDescriptorType = 3, // WEBUSB URL type
+  .bScheme = 0,         // http://
+  .url = "pico-wg.local",
+};
 
 // BOS Descriptor is required for webUSB
 uint8_t const desc_bos[] = {
   // total length, number of device caps
-  TUD_BOS_DESCRIPTOR(BOS_TOTAL_LEN, 1),
+  TUD_BOS_DESCRIPTOR(BOS_TOTAL_LEN, 2),
+
+  // WebUSB descriptor: vendor code, iLandingPage (1 = present, fetched via GET_URL)
+  TUD_BOS_WEBUSB_DESCRIPTOR(VENDOR_REQUEST_WEBUSB, 1),
 
   // Microsoft OS 2.0 descriptor
-  TUD_BOS_MS_OS_20_DESCRIPTOR(MS_OS_20_DESC_LEN, 1)};
+  TUD_BOS_MS_OS_20_DESCRIPTOR(MS_OS_20_DESC_LEN, VENDOR_REQUEST_MICROSOFT)};
 
 uint8_t const *tud_descriptor_bos_cb(void) {
   return desc_bos;
@@ -289,7 +311,7 @@ bool tud_vendor_control_xfer_cb(uint8_t rhport, uint8_t stage, tusb_control_requ
   switch (request->bmRequestType_bit.type) {
     case TUSB_REQ_TYPE_VENDOR:
       switch (request->bRequest) {
-        case 1:
+        case VENDOR_REQUEST_MICROSOFT:
           if (request->wIndex == 7) {
             // Get Microsoft OS 2.0 compatible descriptor
             uint16_t total_len;
@@ -299,6 +321,13 @@ bool tud_vendor_control_xfer_cb(uint8_t rhport, uint8_t stage, tusb_control_requ
           } else {
             return false;
           }
+
+        case VENDOR_REQUEST_WEBUSB:
+          if (request->wIndex == 2) { // WEBUSB_REQUEST_GET_URL
+            return tud_control_xfer(rhport, request, (void *)(uintptr_t)&desc_webusb_url,
+                                    desc_webusb_url.bLength);
+          }
+          return false;
 
         default:
           break;
