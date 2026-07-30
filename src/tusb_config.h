@@ -126,6 +126,15 @@ extern "C" {
 // out of band.
 #define CFG_TUD_CDC 2
 #define CFG_TUD_CDC_RX_BUFSIZE 256
+
+// One vendor-class (WebUSB) interface. Its purpose is to exist unclaimed: on
+// macOS every other interface here is grabbed by a kernel driver (NCM, 2x
+// ACM), and Chromium cannot open a device it holds no unclaimed interface on
+// -- which blocks the GET_URL fetch behind the WebUSB landing-page prompt.
+// The bulk endpoints carry no protocol today.
+#define CFG_TUD_VENDOR 1
+#define CFG_TUD_VENDOR_RX_BUFSIZE 64
+#define CFG_TUD_VENDOR_TX_BUFSIZE 64
 // TX must hold the largest single console reply without yielding to tud_task,
 // since the console emits a reply in one main-loop tick: the worst case is a
 // full scan list (WIFI_SCAN_MAX networks, ~64 B/line) plus its prompt. Too small
