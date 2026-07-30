@@ -144,6 +144,26 @@ device makes).
 LED: solid = tunnel up; slow blink = associating/handshaking; fast blink =
 unprovisioned; off = USB not ready.
 
+## Serial party line
+
+The third CDC-ACM port is a raw byte channel with three endpoints bridged
+together: the USB host's tty, hardware **UART1 on GP4 (TX) / GP5 (RX)**, and
+a single-client **TCP socket on port 2323** at the device's addresses —
+reachable from the WireGuard side (and the USB link, for loopback), never
+from Wi-Fi. Bytes from any endpoint fan out to the other two:
+
+- Wire GP4/GP5 to a target's console (3.3 V!) and both the USB host and any
+  tunnel peer (`nc <device-tunnel-ip> 2323`) can talk to it — a network
+  serial adapter that lives inside your VPN.
+- Leave the pins unwired and it's an out-of-band serial channel between the
+  USB host and the tunnel network.
+
+The host's line coding sets the physical UART: `stty -f /dev/cu.usbmodemXXX7
+9600` retunes the pins (default 115200 8N1; the 1200-baud bootloader touch is
+disabled on this port only). The TCP side is a raw stream — no telnet/RFC2217
+negotiation — and dead clients are reaped by TCP keepalive in about a minute.
+This port deliberately prints no banner: the stream stays byte-clean.
+
 ## Security notes
 
 - WireGuard keys and Wi-Fi credentials are stored **unencrypted** in a flash
