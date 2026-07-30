@@ -16,6 +16,7 @@
 #include "config.h"
 #include "config_proto.h"
 #include "dhcp_server.h"
+#include "serial_bridge.h" // bridge status for the dump
 #include "wg.h"
 #include "wifi_scan.h"
 #include "wireguard.h" // base64 validation of keys
@@ -209,6 +210,10 @@ void config_proto_dump(const cfg_io_t *io, const config_t *cfg) {
   } else {
     out(io, "    mode:       gateway -- host default-routes through the tunnel\n");
   }
+  snprintf(line, sizeof(line), "    bridge:     uart1 gp4/gp5 @%lu <-> tcp :2323 (%s)\n",
+           (unsigned long)serial_bridge_baud(),
+           serial_bridge_client_connected() ? "client attached" : "no client");
+  out(io, line);
   snprintf(line, sizeof(line), "    tunnel state: %s; host lease: %s\n", wg_state_str(),
            dhcp_server_leased() ? "yes" : "no");
   out(io, line);

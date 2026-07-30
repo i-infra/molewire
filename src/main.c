@@ -30,6 +30,7 @@
 #include "debug_console.h"
 #include "dhcp_server.h"
 #include "http_portal.h"
+#include "serial_bridge.h"
 #include "serial_console.h"
 #include "usb_net.h"
 #include "wg.h"
@@ -215,6 +216,7 @@ int main(void) {
   cyw43_arch_lwip_end();
 
   http_portal_init(&cfg);
+  serial_bridge_init();
   serial_console_init(&cfg);
   config_proto_set_apply(apply_wifi);
   config_proto_set_apply_wg(apply_wg);
@@ -246,6 +248,7 @@ int main(void) {
     usb_net_update();      // USB datapath pump
     serial_console_task(); // CDC-ACM management console
     debug_console_task();  // CDC-ACM debug console (drain input)
+    serial_bridge_task();  // CDC <-> UART1 <-> TCP party line
 
     uint32_t now = to_ms_since_boot(get_absolute_time());
 

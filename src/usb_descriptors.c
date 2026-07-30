@@ -48,6 +48,7 @@ enum {
   STRID_MAC,
   STRID_CDC,   // CDC-ACM management console interface name
   STRID_CDC2,  // CDC-ACM debug console interface name
+  STRID_CDC3,  // CDC-ACM serial<->TCP bridge interface name
   STRID_VENDOR // vendor (WebUSB) interface name
 };
 
@@ -60,6 +61,8 @@ enum {
   ITF_NUM_CDC_DATA,   // CDC-ACM data interface
   ITF_NUM_CDC2,       // CDC-ACM notification interface (debug console)
   ITF_NUM_CDC2_DATA,  // CDC-ACM data interface
+  ITF_NUM_CDC3,       // CDC-ACM notification interface (serial<->TCP bridge)
+  ITF_NUM_CDC3_DATA,  // CDC-ACM data interface
   ITF_NUM_VENDOR,     // vendor class (WebUSB): stays unclaimed by the OS so a
                       // browser may open the device (see tusb_config.h)
   ITF_NUM_TOTAL
@@ -93,7 +96,10 @@ tusb_desc_device_t const desc_device = {
 
   .idVendor = 0xCafe,
   .idProduct = USB_PID,
-  .bcdDevice = 0x0101,
+  // Bumped when the interface layout changes without changing the PID (the
+  // auto-PID map only tracks which classes exist, not how many), so hosts
+  // that cache per-device configuration re-read it.
+  .bcdDevice = 0x0102,
 
   .iManufacturer = STRID_MANUFACTURER,
   .iProduct = STRID_PRODUCT,
@@ -113,11 +119,11 @@ uint8_t const *tud_descriptor_device_cb(void) {
 //--------------------------------------------------------------------+
 // Each configuration carries the network function plus two CDC-ACM consoles.
 #define MAIN_CONFIG_TOTAL_LEN \
-  (TUD_CONFIG_DESC_LEN + TUD_RNDIS_DESC_LEN + 2 * TUD_CDC_DESC_LEN + TUD_VENDOR_DESC_LEN)
+  (TUD_CONFIG_DESC_LEN + TUD_RNDIS_DESC_LEN + 3 * TUD_CDC_DESC_LEN + TUD_VENDOR_DESC_LEN)
 #define ALT_CONFIG_TOTAL_LEN \
-  (TUD_CONFIG_DESC_LEN + TUD_CDC_ECM_DESC_LEN + 2 * TUD_CDC_DESC_LEN + TUD_VENDOR_DESC_LEN)
+  (TUD_CONFIG_DESC_LEN + TUD_CDC_ECM_DESC_LEN + 3 * TUD_CDC_DESC_LEN + TUD_VENDOR_DESC_LEN)
 #define NCM_CONFIG_TOTAL_LEN \
-  (TUD_CONFIG_DESC_LEN + TUD_CDC_NCM_DESC_LEN + 2 * TUD_CDC_DESC_LEN + TUD_VENDOR_DESC_LEN)
+  (TUD_CONFIG_DESC_LEN + TUD_CDC_NCM_DESC_LEN + 3 * TUD_CDC_DESC_LEN + TUD_VENDOR_DESC_LEN)
 
 #if CFG_TUSB_MCU == OPT_MCU_LPC175X_6X || CFG_TUSB_MCU == OPT_MCU_LPC177X_8X || CFG_TUSB_MCU == OPT_MCU_LPC40XX
 // LPC 17xx and 40xx endpoint type (bulk/interrupt/iso) are fixed by its number
@@ -158,13 +164,18 @@ uint8_t const *tud_descriptor_device_cb(void) {
 #define EPNUM_CDC2_IN 0x86
 #define EPNUM_VENDOR_OUT 0x07
 #define EPNUM_VENDOR_IN 0x87
+#define EPNUM_CDC3_NOTIF 0x88
+#define EPNUM_CDC3_OUT 0x09
+#define EPNUM_CDC3_IN 0x89
 
-// CDC-ACM console descriptors (management + debug) plus the vendor (WebUSB)
-// interface, appended to every configuration. Same arguments in each case,
-// since only the network function differs between configurations.
+// CDC-ACM descriptors (management + debug consoles + serial<->TCP bridge)
+// plus the vendor (WebUSB) interface, appended to every configuration. Same
+// arguments in each case, since only the network function differs between
+// configurations.
 #define CONSOLE_CDC_DESCRIPTORS                                                                                                                         \
   TUD_CDC_DESCRIPTOR(ITF_NUM_CDC, STRID_CDC, EPNUM_CDC_NOTIF, 8, EPNUM_CDC_OUT, EPNUM_CDC_IN, 64),                                                      \
   TUD_CDC_DESCRIPTOR(ITF_NUM_CDC2, STRID_CDC2, EPNUM_CDC2_NOTIF, 8, EPNUM_CDC2_OUT, EPNUM_CDC2_IN, 64),                                                 \
+  TUD_CDC_DESCRIPTOR(ITF_NUM_CDC3, STRID_CDC3, EPNUM_CDC3_NOTIF, 8, EPNUM_CDC3_OUT, EPNUM_CDC3_IN, 64),                                                 \
   TUD_VENDOR_DESCRIPTOR(ITF_NUM_VENDOR, STRID_VENDOR, EPNUM_VENDOR_OUT, EPNUM_VENDOR_IN, 64)
 
 #if CFG_TUD_ECM_RNDIS
@@ -365,6 +376,7 @@ static char const *string_desc_arr[] = {
   [STRID_INTERFACE] = "TinyUSB Network Interface", // Interface Description
   [STRID_CDC] = "pico-wg-dongle console", // CDC-ACM management console
   [STRID_CDC2] = "pico-wg-dongle debug", // CDC-ACM debug console
+  [STRID_CDC3] = "pico-wg-dongle bridge", // CDC-ACM serial<->TCP bridge
   [STRID_VENDOR] = "pico-wg-dongle WebUSB" // vendor (WebUSB) interface
 
   // STRID_MAC index is handled separately

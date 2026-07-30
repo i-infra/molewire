@@ -12,18 +12,25 @@
 #include "config.h"
 #include "config_proto.h"
 #include "debug_console.h" // debug_console_line_state (shared CDC callback)
+#include "serial_bridge.h" // line-coding pass-through for the bridge port
 #include "serial_console.h"
 
 // The CDC-ACM management console is the only CDC-ACM instance (the network
 // class is a separate USB function), so it is always CDC index 0.
 #define CONSOLE_ITF 0
 
-// Arduino-style development convenience: opening either CDC port at 1200 baud
-// reboots into the UF2 bootloader, so a new image can be flashed without
+// Arduino-style development convenience: opening a console CDC port at 1200
+// baud reboots into the UF2 bootloader, so a new image can be flashed without
 // touching the board ("stty -f /dev/cu.usbmodem* 1200", or picotool). The rate
-// is otherwise meaningless on a virtual port, so nothing legitimate collides.
+// is otherwise meaningless on the console ports, so nothing legitimate
+// collides. The serial-bridge port is exempt -- there the line coding is real
+// (it retunes the physical UART, and 1200 baud is a legitimate target rate).
 void tud_cdc_line_coding_cb(uint8_t itf, cdc_line_coding_t const *coding) {
-  (void)itf;
+  if (itf == SERIAL_BRIDGE_ITF) {
+    serial_bridge_apply_coding(coding->bit_rate, coding->data_bits, coding->parity,
+                               coding->stop_bits);
+    return;
+  }
   if (coding->bit_rate == 1200) {
     // The main-loop watchdog stays armed across reset_usb_boot and would fire
     // inside the bootloader (the bench firmware works without this only

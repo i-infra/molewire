@@ -39,6 +39,7 @@ add_executable(pico-wg-dongle
     src/dhcp_server.c
     src/wg.c
     src/http_portal.c
+    src/serial_bridge.c
     src/usb_descriptors.c
     wireguard/wireguard.c
     wireguard/wireguardif.c

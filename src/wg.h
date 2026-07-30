@@ -54,6 +54,10 @@ bool wg_keypair_generate(uint8_t pub[32], uint8_t priv[32]);
 // Derive the public key of an existing private key (for status displays).
 bool wg_public_from_private(uint8_t pub[32], const uint8_t priv[32]);
 
+// The WireGuard netif while the tunnel interface exists, else NULL (e.g. for
+// which-netif-did-this-arrive-on checks).
+struct netif *wg_active_netif(void);
+
 // lwIP LWIP_HOOK_IP4_ROUTE_SRC hook (referenced from lwip_hooks.h).
 struct netif *wg_ip4_route_hook(const struct ip4_addr *src, const struct ip4_addr *dest);
 

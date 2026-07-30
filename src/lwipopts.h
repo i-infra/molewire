@@ -35,6 +35,8 @@
 #define MEMP_NUM_TCP_PCB 6
 #define MEMP_NUM_TCP_PCB_LISTEN 2
 #define MEMP_NUM_TCP_SEG 24
+// Per-pcb keepalive tuning (the serial bridge reaps dead tunnel clients).
+#define LWIP_TCP_KEEPALIVE 1
 
 #define LWIP_IPV4 1
 // IPv6 exists ONLY as link-local on the USB netif: an addressing plane for the

@@ -119,12 +119,14 @@ extern "C" {
 #define CFG_TUD_ECM_RNDIS USE_ECM
 #define CFG_TUD_NCM (1 - CFG_TUD_ECM_RNDIS)
 
-// Two CDC-ACM serial functions alongside the network class: a management console
-// (instance 0, serial_console.c) and a debug-output console (instance 1,
-// debug_console.c). Both are reachable the instant USB enumerates -- before
-// Wi-Fi is up -- and carry no IP, so the device can be provisioned and observed
-// out of band.
-#define CFG_TUD_CDC 2
+// Three CDC-ACM serial functions alongside the network class: a management
+// console (instance 0, serial_console.c), a debug-output console (instance 1,
+// debug_console.c), and a raw serial<->TCP bridge (instance 2,
+// serial_bridge.c) whose byte stream is exposed on TCP :2323 at the device's
+// WireGuard address. The consoles are reachable the instant USB enumerates --
+// before Wi-Fi is up -- and carry no IP, so the device can be provisioned and
+// observed out of band.
+#define CFG_TUD_CDC 3
 #define CFG_TUD_CDC_RX_BUFSIZE 256
 
 // One vendor-class (WebUSB) interface. Its purpose is to exist unclaimed: on

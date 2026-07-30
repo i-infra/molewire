@@ -95,6 +95,8 @@ bool wg_public_from_private(uint8_t pub[32], const uint8_t priv[32]) {
   return wireguard_x25519(pub, priv, curve_basepoint) == 0;
 }
 
+struct netif *wg_active_netif(void) { return wg_netif_added ? &wg_netif : NULL; }
+
 // TAI64N without NTP. WireGuard's handshake timestamp only has to be strictly
 // increasing as seen by the server, not a real time. A flash-backed boot
 // counter provides the increase across reboots; uptime provides it within one
