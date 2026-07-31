@@ -17,6 +17,7 @@
 #include "config_proto.h"
 #include "dhcp_server.h"
 #include "http_portal.h"
+#include "pcap.h"
 #include "usb_net.h"
 #include "web_page.h" // generated: web_index_gz[] / WEB_INDEX_GZ_LEN
 #include "wg.h"
@@ -35,11 +36,13 @@ typedef struct {
   uint16_t req_len;
   uint8_t idle;
   bool responded;
+  bool pcap_hold; // this connection froze the capture ring; resume on teardown
   // Response = one dynamic segment (headers + any generated body, in resp[])
-  // then an optional flash segment (the gzipped SPA). Sent with NOCOPY --
-  // both stay stable until the connection is done.
-  const uint8_t *seg[2];
-  uint32_t seg_len[2];
+  // then up to two stable segments (the gzipped SPA in flash, or the two
+  // spans of the frozen pcap ring). Sent with NOCOPY -- all must stay stable
+  // until ACKed, so the connection closes only once the send buffer drains.
+  const uint8_t *seg[3];
+  uint32_t seg_len[3];
   uint8_t seg_ix;
   uint16_t resp_len;
   char req[REQ_MAX];
@@ -153,6 +156,9 @@ static uint16_t status_json(char *o, uint16_t cap) {
 // --- connection lifecycle -------------------------------------------------------
 
 static void conn_free(conn_t *c) {
+  if (c->pcap_hold) {
+    pcap_resume();
+  }
   if (c->pcb) {
     tcp_arg(c->pcb, NULL);
     tcp_recv(c->pcb, NULL);
@@ -165,7 +171,7 @@ static void conn_free(conn_t *c) {
 
 // Push queued response segments as send-buffer space allows; close when done.
 static void conn_send_more(conn_t *c) {
-  while (c->seg_ix < 2) {
+  while (c->seg_ix < 3) {
     if (c->seg_len[c->seg_ix] == 0) {
       c->seg_ix++;
       continue;
@@ -175,7 +181,7 @@ static void conn_send_more(conn_t *c) {
       return; // wait for tcp_sent
     }
     uint16_t chunk = (uint16_t)LWIP_MIN(c->seg_len[c->seg_ix], room);
-    // Both segments are stable (static conn buffer / XIP flash): NOCOPY.
+    // All segments are stable (conn buffer / XIP flash / frozen ring): NOCOPY.
     if (tcp_write(c->pcb, c->seg[c->seg_ix], chunk, 0) != ERR_OK) {
       return; // retry from tcp_sent
     }
@@ -183,7 +189,12 @@ static void conn_send_more(conn_t *c) {
     c->seg_len[c->seg_ix] -= chunk;
   }
   tcp_output(c->pcb);
-  // Everything queued: FIN after the queued data drains.
+  // Everything queued -- but NOCOPY data must survive until ACKed (lwIP
+  // reads it again on retransmit), and the conn buffer / frozen ring are
+  // released below. Close only once the send buffer has fully drained.
+  if (tcp_sndbuf(c->pcb) < TCP_SND_BUF) {
+    return; // more tcp_sent callbacks are coming
+  }
   struct tcp_pcb *pcb = c->pcb;
   conn_free(c);
   if (tcp_close(pcb) != ERR_OK) {
@@ -217,6 +228,8 @@ static void conn_respond(conn_t *c, const char *status, const char *ctype,
     c->seg[1] = body;
     c->seg_len[1] = body ? body_len : 0;
   }
+  c->seg[2] = NULL;
+  c->seg_len[2] = 0;
   c->responded = true;
   conn_send_more(c);
 }
@@ -244,6 +257,33 @@ static void handle_request(conn_t *c) {
   if (is_get && (strcmp(path, "/") == 0 || strcmp(path, "/index.html") == 0)) {
     conn_respond(c, "200 OK", "text/html; charset=utf-8", "Content-Encoding: gzip\r\n",
                  web_index_gz, WEB_INDEX_GZ_LEN);
+    return;
+  }
+  if (is_get && strcmp(path, "/api/pcap") == 0) {
+    // Freeze the capture ring and stream it in place: headers + pcap global
+    // header from the conn buffer, then the ring's two spans, all NOCOPY.
+    // The ring stays frozen until this connection tears down (conn_free).
+    const uint8_t *a, *b;
+    uint32_t al, bl;
+    pcap_freeze(&a, &al, &b, &bl);
+    c->pcap_hold = true;
+    uint32_t body = PCAP_GLOBAL_HDR_LEN + al + bl;
+    int h = snprintf(c->resp, sizeof(c->resp),
+                     "HTTP/1.1 200 OK\r\nContent-Type: application/vnd.tcpdump.pcap\r\n"
+                     "Content-Length: %lu\r\nCache-Control: no-store\r\n"
+                     "Content-Disposition: attachment; filename=\"pico-wg.pcap\"\r\n"
+                     "Connection: close\r\n\r\n",
+                     (unsigned long)body);
+    pcap_global_header((uint8_t *)c->resp + h);
+    c->seg[0] = (const uint8_t *)c->resp;
+    c->seg_len[0] = (uint32_t)h + PCAP_GLOBAL_HDR_LEN;
+    c->seg[1] = a;
+    c->seg_len[1] = al;
+    c->seg[2] = b;
+    c->seg_len[2] = bl;
+    c->seg_ix = 0;
+    c->responded = true;
+    conn_send_more(c);
     return;
   }
   if (is_get && strcmp(path, "/api/status") == 0) {

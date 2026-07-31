@@ -119,6 +119,12 @@ placeholder="25"></div>
 
 <div class="card">
 <h2>Console</h2>
+<div class="actions" style="margin:0 0 .6rem">
+<button onclick="cmd('pcap on')">pcap on</button>
+<button onclick="cmd('pcap off')">pcap off</button>
+<button onclick="cmd('pcap clear')">clear</button>
+<button onclick="location.href='/api/pcap'">download .pcap</button>
+</div>
 <div id="log"></div>
 <div class="row" style="margin-top:.6rem">
 <div><input id="cmdline" placeholder="console command… (e.g. help, save, reboot)"></div>

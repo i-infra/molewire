@@ -1,11 +1,13 @@
 // Serial party line: one byte stream with three endpoints -- the third
 // CDC-ACM port on the USB host, hardware UART1 (GP4 TX / GP5 RX), and a TCP
-// socket (:2323) reachable at the device's addresses from the WireGuard side
-// (and the USB link, for loopback testing). Bytes arriving at any endpoint
-// fan out to the other two, so the dongle doubles as a network serial
-// adapter: wire GP4/GP5 to a target's console and both the USB host and any
-// tunnel peer can talk to it; with the pins unwired it is a host<->VPN
-// out-of-band serial channel.
+// socket reachable at the device's addresses from the WireGuard side (and
+// the USB link, for loopback testing): :2323 raw, :3323 telnet/RFC 2217
+// (remote baud/format/DTR/RTS control; DTR -> GP7, RTS -> GP6, asserted =
+// low, for esptool-style target reset). Bytes arriving at any endpoint fan
+// out to the other two, so the dongle doubles as a network serial adapter:
+// wire GP4/GP5 to a target's console and both the USB host and any tunnel
+// peer can talk to it; with the pins unwired it is a host<->VPN out-of-band
+// serial channel.
 //
 // Flow control: a transfer happens only when every *active* sink can take a
 // byte (absent sinks -- no TCP client, host port closed -- drop instead of

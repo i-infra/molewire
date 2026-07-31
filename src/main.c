@@ -138,6 +138,18 @@ static void apply_wg(const config_t *cfg) {
   cyw43_arch_lwip_begin();
   mdns_resp_announce(usb_net_netif());
   cyw43_arch_lwip_end();
+
+  // If the USB-link subnet itself changed (island <-> tunnel pair), schedule a
+  // logical replug so the host re-DHCPs onto it without a manual reboot. Not
+  // on the boot-time apply -- the host is still enumerating the device then.
+  uint32_t now_addr = config_wg_complete(cfg) ? cfg->wg.addr : BRINGUP_DEV_ADDR;
+  static uint32_t applied_addr;
+  static bool applied_once;
+  if (applied_once && now_addr != applied_addr) {
+    usb_net_schedule_bounce();
+  }
+  applied_once = true;
+  applied_addr = now_addr;
 }
 
 // Free RAM: heap region minus what malloc holds out (debug console gauge).

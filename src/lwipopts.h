@@ -33,7 +33,8 @@
 #define TCP_WND (4 * TCP_MSS)
 #define TCP_SND_BUF (4 * TCP_MSS)
 #define MEMP_NUM_TCP_PCB 6
-#define MEMP_NUM_TCP_PCB_LISTEN 2
+// Listeners: portal :80 + bridge :2323 raw + bridge :3323 rfc2217, headroom.
+#define MEMP_NUM_TCP_PCB_LISTEN 4
 #define MEMP_NUM_TCP_SEG 24
 // Per-pcb keepalive tuning (the serial bridge reaps dead tunnel clients).
 #define LWIP_TCP_KEEPALIVE 1

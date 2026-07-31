@@ -18,6 +18,7 @@
 #include <tusb.h>
 
 #include "debug_console.h"
+#include "pcap.h"
 #include "usb_net.h"
 
 // The MAC TinyUSB reports in the NCM iMACAddress string descriptor -- the
@@ -276,6 +277,7 @@ uint16_t tud_network_xmit_cb(uint8_t *dst, void *ref, uint16_t arg) {
   // drops zero-checksum datagrams. The frame is a contiguous copy here, so
   // regenerate any zeroed checksums before it goes over USB.
   fix_host_checksums(dst, n);
+  pcap_capture(dst, n); // record exactly what the host receives
   return n;
 }
 
@@ -333,7 +335,28 @@ void usb_net_set_addr(uint32_t addr_be, uint8_t prefix) {
 
 struct netif *usb_net_netif(void) { return &usb_netif; }
 
+// Deferred logical replug (see usb_net.h). This TinyUSB has no runtime NCM
+// link-state control, so the whole device detaches and re-attaches -- which
+// is also the only signal that reliably makes every host re-run DHCP.
+static uint32_t bounce_at_ms;    // 0 = idle
+static uint32_t reconnect_at_ms; // 0 = idle
+
+void usb_net_schedule_bounce(void) {
+  bounce_at_ms = to_ms_since_boot(get_absolute_time()) + 700u;
+}
+
 void usb_net_update(void) {
+  uint32_t now = to_ms_since_boot(get_absolute_time());
+  if (bounce_at_ms && now >= bounce_at_ms) {
+    bounce_at_ms = 0;
+    tud_disconnect();
+    reconnect_at_ms = now + 300u;
+  }
+  if (reconnect_at_ms && now >= reconnect_at_ms) {
+    reconnect_at_ms = 0;
+    tud_connect();
+  }
+
   tud_task();
   usb_tx_drain();
 
@@ -347,6 +370,7 @@ void usb_net_update(void) {
     // lwIP sees it.
     if (p->next == NULL) {
       fix_host_checksums((uint8_t *)p->payload, p->len);
+      pcap_capture((const uint8_t *)p->payload, p->len);
     }
     cyw43_arch_lwip_begin();
     if (usb_netif.input(p, &usb_netif) != ERR_OK) {

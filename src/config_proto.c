@@ -16,6 +16,7 @@
 #include "config.h"
 #include "config_proto.h"
 #include "dhcp_server.h"
+#include "pcap.h"          // capture toggle + status for the dump
 #include "serial_bridge.h" // bridge status for the dump
 #include "wg.h"
 #include "wifi_scan.h"
@@ -210,10 +211,17 @@ void config_proto_dump(const cfg_io_t *io, const config_t *cfg) {
   } else {
     out(io, "    mode:       gateway -- host default-routes through the tunnel\n");
   }
-  snprintf(line, sizeof(line), "    bridge:     uart1 gp4/gp5 @%lu <-> tcp :2323 (%s)\n",
+  snprintf(line, sizeof(line), "    bridge:     uart1@%lu tcp :2323 raw :3323 rfc2217 (%s)\n",
            (unsigned long)serial_bridge_baud(),
-           serial_bridge_client_connected() ? "client attached" : "no client");
+           serial_bridge_client_connected() ? "client" : "no client");
   out(io, line);
+  if (pcap_enabled()) {
+    uint32_t pkts, bytes;
+    pcap_stats(&pkts, &bytes);
+    snprintf(line, sizeof(line), "    pcap:       capturing (%lu pkts, %lu KB in ring)\n",
+             (unsigned long)pkts, (unsigned long)(bytes / 1024u));
+    out(io, line);
+  }
   snprintf(line, sizeof(line), "    tunnel state: %s; host lease: %s\n", wg_state_str(),
            dhcp_server_leased() ? "yes" : "no");
   out(io, line);
@@ -522,6 +530,20 @@ static void handle_main(const cfg_io_t *io, char *cmd, char *args, config_t *cfg
       g_apply(cfg); // active profile may have changed
     }
     config_proto_dump(io, cfg);
+  } else if (strcasecmp(cmd, "PCAP") == 0 && args) {
+    // Runtime toggle for the USB-link packet capture (not persisted).
+    if (strcasecmp(args, "on") == 0) {
+      pcap_set_enabled(true);
+      out(io, "[*] capturing the USB link (download via the portal: /api/pcap)\n");
+    } else if (strcasecmp(args, "off") == 0) {
+      pcap_set_enabled(false);
+      out(io, "[*] capture stopped (ring kept -- 'pcap clear' to discard)\n");
+    } else if (strcasecmp(args, "clear") == 0) {
+      pcap_clear();
+      out(io, "[*] capture ring cleared\n");
+    } else {
+      out(io, "ERR usage: pcap <on|off|clear>\n");
+    }
   } else if (strcasecmp(cmd, "GENKEY") == 0) {
     // Generate the WireGuard identity on-device: the private key goes straight
     // from the TRNG into the config and is never printed anywhere; only the
@@ -594,7 +616,8 @@ static void handle_main(const cfg_io_t *io, char *cmd, char *args, config_t *cfg
   } else {
     out(io, "[!] commands: set <ssid|pass|country|debug|key|peer|psk|endpoint|addr|"
             "hostip|dns|keepalive|mtu|routes> <val> | genkey [force] | pubkey | "
-            "list | use <n> | del <n> | scan | save | restore | reboot | bootsel\n");
+            "pcap <on|off|clear> | list | use <n> | del <n> | scan | save | "
+            "restore | reboot | bootsel\n");
   }
 }
 
