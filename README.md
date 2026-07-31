@@ -160,9 +160,26 @@ from Wi-Fi. Bytes from any endpoint fan out to the other two:
 
 The host's line coding sets the physical UART: `stty -f /dev/cu.usbmodemXXX7
 9600` retunes the pins (default 115200 8N1; the 1200-baud bootloader touch is
-disabled on this port only). The TCP side is a raw stream — no telnet/RFC2217
-negotiation — and dead clients are reaped by TCP keepalive in about a minute.
-This port deliberately prints no banner: the stream stays byte-clean.
+disabled on this port only). Port 2323 is a raw stream; dead clients are
+reaped by TCP keepalive in about a minute. This port deliberately prints no
+banner: the stream stays byte-clean.
+
+Port **3323** speaks telnet + **RFC 2217** (COM-PORT-CONTROL): remote clients
+can set the UART baud/format and toggle DTR/RTS, which drive **GP7/GP6**
+(asserted = driven low). Wire GP6 → ESP32 EN and GP7 → IO0 and esptool's
+auto-reset works across the VPN:
+
+```sh
+esptool --port rfc2217://<device-tunnel-ip>:3323 flash_id
+```
+
+## Packet capture
+
+`pcap on` (console or portal button) records the USB link — both directions,
+after checksum repair, i.e. the plaintext side of the tunnel — into a 64 KB
+RAM ring (snaplen 256, oldest evicted). Download it as a Wireshark-ready file
+from `/api/pcap`; timestamps are seconds-since-boot. This is the tool for
+"the host says it sent X, what did the dongle actually see" questions.
 
 ## Security notes
 
