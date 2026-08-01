@@ -330,6 +330,12 @@ bool tud_vendor_control_xfer_cb(uint8_t rhport, uint8_t stage, tusb_control_requ
 
   switch (request->bmRequestType_bit.type) {
     case TUSB_REQ_TYPE_VENDOR:
+      // IN only: both requests serve const descriptors from flash, and an OUT
+      // transfer would hand that flash pointer to tud_control_xfer as a
+      // RECEIVE buffer (writes into XIP).
+      if (request->bmRequestType_bit.direction != TUSB_DIR_IN) {
+        return false;
+      }
       switch (request->bRequest) {
         case VENDOR_REQUEST_MICROSOFT:
           if (request->wIndex == 7) {
@@ -343,7 +349,9 @@ bool tud_vendor_control_xfer_cb(uint8_t rhport, uint8_t stage, tusb_control_requ
           }
 
         case VENDOR_REQUEST_WEBUSB:
-          if (request->wIndex == 2) { // WEBUSB_REQUEST_GET_URL
+          // wIndex 2 = GET_URL; wValue = URL descriptor index, and we
+          // declared exactly one (iLandingPage = 1).
+          if (request->wIndex == 2 && request->wValue == 1) {
             return tud_control_xfer(rhport, request, (void *)(uintptr_t)&desc_webusb_url,
                                     desc_webusb_url.bLength);
           }
