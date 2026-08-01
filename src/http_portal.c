@@ -31,6 +31,20 @@
 #define RESP_MAX 2304 // headers + JSON status or captured console output
 #define IDLE_POLLS 10 // ~10 s at the 1 s poll interval before an idle abort
 
+// CORS + Chromium Local Network Access: lets an https-hosted entry page (the
+// WebUSB landing page) talk to this plaintext portal via
+// fetch(..., {targetAddressSpace: "private"}). The wildcard origin is
+// tempered by the transport: the portal only accepts connections arriving on
+// the USB link, and LNA additionally gates each web origin behind a per-site
+// browser permission prompt.
+#define PORTAL_CORS_HEADERS "Access-Control-Allow-Origin: *\r\n"
+// Extra preflight-only headers; conn_respond already emits the CORS origin.
+#define PORTAL_PREFLIGHT_HEADERS                         \
+  "Access-Control-Allow-Methods: GET, POST, OPTIONS\r\n" \
+  "Access-Control-Allow-Headers: Content-Type\r\n"       \
+  "Access-Control-Allow-Private-Network: true\r\n"       \
+  "Access-Control-Max-Age: 86400\r\n"
+
 typedef struct {
   struct tcp_pcb *pcb;
   uint16_t req_len;
@@ -209,7 +223,8 @@ static void conn_respond(conn_t *c, const char *status, const char *ctype,
                          const char *extra_hdr, const uint8_t *body, uint32_t body_len) {
   int h = snprintf(c->resp, sizeof(c->resp),
                    "HTTP/1.1 %s\r\nContent-Type: %s\r\nContent-Length: %lu\r\n"
-                   "Cache-Control: no-store\r\n%sConnection: close\r\n\r\n",
+                   "Cache-Control: no-store\r\n" PORTAL_CORS_HEADERS
+                   "%sConnection: close\r\n\r\n",
                    status, ctype, (unsigned long)body_len, extra_hdr ? extra_hdr : "");
   c->resp_len = (uint16_t)h;
   c->seg[0] = (const uint8_t *)c->resp;
@@ -246,6 +261,12 @@ static void handle_request(conn_t *c) {
 
   bool is_get = strncmp(c->req, "GET ", 4) == 0;
   bool is_post = strncmp(c->req, "POST ", 5) == 0;
+  bool is_options = strncmp(c->req, "OPTIONS ", 8) == 0;
+  if (is_options) {
+    // CORS/Local-Network-Access preflight: approve for any path.
+    conn_respond(c, "204 No Content", "text/plain", PORTAL_PREFLIGHT_HEADERS, NULL, 0);
+    return;
+  }
   char *path = c->req + (is_get ? 4 : 5);
   char *path_end = strchr(path, ' ');
   if ((!is_get && !is_post) || !path_end) {
@@ -270,7 +291,7 @@ static void handle_request(conn_t *c) {
     uint32_t body = PCAP_GLOBAL_HDR_LEN + al + bl;
     int h = snprintf(c->resp, sizeof(c->resp),
                      "HTTP/1.1 200 OK\r\nContent-Type: application/vnd.tcpdump.pcap\r\n"
-                     "Content-Length: %lu\r\nCache-Control: no-store\r\n"
+                     "Content-Length: %lu\r\nCache-Control: no-store\r\n" PORTAL_CORS_HEADERS
                      "Content-Disposition: attachment; filename=\"pico-wg.pcap\"\r\n"
                      "Connection: close\r\n\r\n",
                      (unsigned long)body);

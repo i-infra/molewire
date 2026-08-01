@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>pico-wg-dongle</title>
+<!--
+  The https entry page the dongle's WebUSB landing descriptor points at.
+  Host anywhere static + https (GitHub Pages works). Its jobs:
+    1. Navigate the user to the on-device portal (plain navigation to http://
+       is allowed from an https page -- mixed-content rules only block fetch).
+    2. Where the browser supports Local Network Access, probe the portal
+       directly (fetch with targetAddressSpace) and show live status here.
+-->
+<style>
+:root{--bg:#0d1117;--card:#161b22;--line:#30363d;--fg:#e6edf3;--dim:#8b949e;
+--ok:#3fb950;--acc:#58a6ff}
+body{margin:0;background:var(--bg);color:var(--fg);display:grid;
+place-items:center;min-height:100vh;
+font:16px/1.5 ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif}
+main{max-width:26rem;padding:2rem;text-align:center}
+h1{font-size:1.3rem;margin:0 0 .4rem}
+p{color:var(--dim);margin:.4rem 0}
+a.go{display:inline-block;margin:1.2rem 0 .6rem;padding:.7rem 1.6rem;
+background:#1f6feb;color:#fff;border-radius:8px;text-decoration:none;
+font-weight:600}
+a.alt{color:var(--acc);font-size:.85rem}
+#live{margin-top:1.2rem;padding:.8rem;border:1px solid var(--line);
+border-radius:8px;background:var(--card);font-size:.85rem;display:none}
+#live.ok{display:block;border-color:var(--ok)}
+code{font-family:ui-monospace,Menlo,monospace;font-size:.85em}
+</style>
+</head>
+<body>
+<main>
+<h1>pico-wg-dongle</h1>
+<p>Your USB WireGuard dongle serves its configuration portal on the USB link
+itself — nothing here leaves your machine.</p>
+<a class="go" href="http://pico-wg.local/">Open the portal</a>
+<p><a class="alt" href="http://172.31.255.1/">unprovisioned fallback
+(172.31.255.1)</a></p>
+<div id="live"></div>
+<p style="font-size:.75rem;margin-top:1.4rem">If the portal doesn't load, the
+serial console on the first CDC port speaks the same protocol
+(<code>screen /dev/ttyACM0</code>).</p>
+</main>
+<script>
+"use strict";
+// Progressive enhancement: on browsers with Local Network Access, an https
+// page may fetch a plaintext private-network URL by declaring the target
+// address space (the device answers the CORS/LNA preflight). First use asks
+// the user's permission via a browser prompt.
+(async () => {
+  try {
+    const r = await fetch("http://pico-wg.local/api/status",
+                          {targetAddressSpace: "private", cache: "no-store"});
+    const j = await r.json();
+    const el = document.getElementById("live");
+    el.className = "ok";
+    el.textContent = `dongle found — ${j.version}, wifi ${
+      j.wifi.link ? "associated" : "associating"}, tunnel ${j.wg.state}`;
+  } catch (e) { /* no LNA / no permission / no dongle: the link above still works */ }
+})();
+</script>
+</body>
+</html>
