@@ -31,6 +31,12 @@
 //                         these subnets (max 4) route via the dongle (opt 121)
 //   set routes off        full-gateway mode: host default-routes through tunnel
 //   set dns off           offer the host no resolver (keep its own DNS)
+//   genkey [force]        generate the WireGuard keypair on-device (TRNG) and
+//                         print ONLY the public key; force replaces an
+//                         existing key (re-register with the server after)
+//   pubkey                reprint the public key of the stored private key
+//   pcap <on|off|clear>   toggle/clear the USB-link packet capture ring
+//                         (download via the portal at /api/pcap)
 //   list                  list the saved profiles
 //   use <n>               make profile n active and re-associate
 //   del <n>               delete profile n
@@ -49,6 +55,8 @@
 
 #ifndef CONFIG_PROTO_H
 #define CONFIG_PROTO_H
+
+#include <stddef.h> // size_t in config_proto_pubkey
 
 #include "config.h"
 

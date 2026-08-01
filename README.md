@@ -31,8 +31,11 @@ Wi-Fi LAN, and the firmware fails closed: no tunnel, no forwarding.
 - **No DNS leaks.** The device runs no DNS forwarder at all. DHCP option 6
   hands the host the tunnel-side resolver; queries ride the tunnel like any
   other packet.
-- **MTU is handled.** DHCP option 26 sets the host's interface MTU to the
-  WireGuard MTU (1420), so TCP MSS comes out right and nothing black-holes.
+- **MTU is handled, twice.** DHCP option 26 offers the host the tunnel MTU
+  (1420 by default, `set mtu` to lower it), and because hosts ignore or floor
+  that (macOS refuses < 1280), the dongle also rewrites the MSS option of
+  forwarded TCP SYNs in both directions — so TCP fits even through servers
+  that re-encapsulate (e.g. a WireGuard→Tailscale bridge, true path MTU 1216).
 - **No NTP dependency.** WireGuard handshake timestamps only need to increase
   monotonically; a flash-backed boot counter provides that across reboots
   (`wg_time_init`), so the tunnel can come up before any time sync exists.
@@ -56,8 +59,9 @@ Once this firmware (or the bench) is running, the button is never needed again �
 three ways to land back in the UF2 bootloader:
 
 - type `bootsel` on the management console (`reboot` for a plain restart);
-- open either CDC port at 1200 baud: `stty -f /dev/cu.usbmodem<n> 1200`
-  (Linux: `stty -F /dev/ttyACM0 1200`);
+- open either console CDC port at 1200 baud: `stty -f /dev/cu.usbmodem<n> 1200`
+  (Linux: `stty -F /dev/ttyACM0 1200`; the serial-bridge port is exempt —
+  1200 baud is a legitimate rate there);
 - `picotool reboot -f -u` (needs a USB-capable picotool, e.g. `brew install picotool`).
 
 A typical development loop is then:
@@ -75,9 +79,11 @@ The bench firmware honors the 1200-baud reset too (via pico_stdio_usb).
 ### The portal (the easy way)
 
 Plug the dongle in and browse to **http://pico-wg.local** — a configuration
-and status page served by the device itself (Chromium-family browsers on
-macOS/Linux even prompt "Go to pico-wg.local" at plug-in, via a WebUSB
-landing-page descriptor). Fill in Wi-Fi and WireGuard settings, press
+and status page served by the device itself. (The device also carries a
+WebUSB landing-page descriptor naming that URL; Chromium-family browsers
+*may* prompt "Go to pico-wg.local" at plug-in, but current builds often ship
+that notification disabled, so don't count on it.) Fill in Wi-Fi and
+WireGuard settings, press
 *generate keypair*, give the shown public key to your WireGuard admin, enter
 the address pair and endpoint they hand back, *apply*, *save*. The page also
 shows live status (tunnel state, lease, USB counters) and has a console box
@@ -92,17 +98,19 @@ Reachability is engineered to survive any config state:
   with **no router, no routes, no DNS** (a bring-up island): the portal is
   also at `http://172.31.255.1/` and the host's own connectivity is
   unaffected. Once provisioned, the island is replaced by the tunnel
-  addressing; `pico-wg.local` follows automatically.
+  addressing; `pico-wg.local` follows automatically, and the device replugs
+  itself (a brief USB bounce) so the host re-DHCPs onto the new subnet
+  without any manual step.
 - The portal is refused to connections arriving from anywhere but the USB
   link (same trust boundary as the serial console), and the private key is
   never included in any page, API response, or console output.
 
 ### The serial console
 
-The device enumerates three USB functions: the network interface plus two
-CDC-ACM serial ports — a management console and a debug console. Open the
-first serial port (e.g. `screen /dev/ttyACM0`) and press Enter for the status
-view. Then:
+The device enumerates the network interface, three CDC-ACM serial ports — the
+management console, a debug-diagnostics stream (`set debug on`), and the
+serial bridge (below) — and a WebUSB vendor interface. Open the first serial
+port (e.g. `screen /dev/ttyACM0`) and press Enter for the status view. Then:
 
 ```
 set ssid MyUpstreamNet
@@ -139,7 +147,23 @@ tunnel space that overlaps no other peer's AllowedIPs; use the middle two
 addresses (the host's OS applies real subnet semantics to its lease). The
 endpoint may be an IPv4 literal or a hostname (resolved via the upstream
 network's resolver once Wi-Fi associates — the one pre-tunnel lookup the
-device makes).
+device makes). The full command reference lives in `src/config_proto.h`.
+
+### Gateway vs split-tunnel mode
+
+By default the host is offered the dongle as its **default router** (DHCP
+option 3): all host traffic rides the tunnel — the VPN-appliance mode. That
+also means the dongle takes over the host's default route and (if `set dns`
+is configured) its resolver, which you may not want on your daily machine.
+
+`set routes <cidr>[,<cidr>...]` (max 4) switches to **split mode**: no router
+option; only the listed subnets are pushed as classless static routes via the
+dongle (DHCP option 121), so the host keeps its own default route and DNS
+while the VPN subnets ride the tunnel. `set dns off` keeps the host's
+resolver in either mode; `set routes off` returns to full-gateway. When the
+server re-encapsulates (e.g. bridges into Tailscale), also `set mtu` to the
+true path MTU — the dongle then advertises it via DHCP *and* clamps forwarded
+TCP MSS, which is what actually prevents black-holed connections.
 
 LED: solid = tunnel up; slow blink = associating/handshaking; fast blink =
 unprovisioned; off = USB not ready.
@@ -198,13 +222,17 @@ from `/api/pcap`; timestamps are seconds-since-boot. This is the tool for
   is off — so there is still no v6 side channel around the (v4) tunnel; v6
   packets can reach the device itself and nothing beyond.
 
-## Performance expectations
+## Performance (measured)
 
-USB Full Speed caps the wire at 12 Mbit/s; the parent project bridges ~4.75
-Mbit/s of TCP payload without crypto. ChaCha20-Poly1305 (reference C
-implementation) will cost a chunk of that. Headroom exists: the second core is
-idle, and `wireguard/crypto/cortex/` carries Cortex-M assembly X25519 if
-handshake latency ever matters.
+USB Full Speed caps the wire at 12 Mbit/s and is the bottleneck by a wide
+margin. Measured end to end (Mac → dongle → WireGuard → Tailscale-bridged
+server → tailnet): **4.65 Mbit/s** of TCP payload ≈ 98% of the no-crypto L2
+bridge baseline — the crypto is effectively free at USB FS rates. On-device
+bench (`pico-wg-bench.uf2`): ChaCha20-Poly1305 37.3 Mbit/s at 1420 B (~32
+cycles/byte), X25519 14.2 ms/op (reference C), rekey stall ~56 ms every ~2
+minutes. The Cortex-M0 assembly X25519 in `wireguard/crypto/cortex/` measured
+65% *slower* than the C on the M33 — don't use it. Remaining headroom if it
+ever matters: the second core is idle.
 
 ## Lineage and licenses
 
@@ -212,8 +240,21 @@ handshake latency ever matters.
   [pico-usb-wifi](https://gitlab.com/baiyibai/pico-usb-wifi) (MIT) — the
   routed datapath replaces its transparent L2 bridge.
 - WireGuard implementation: [wireguard-lwip](https://github.com/smartalock/wireguard-lwip)
-  (BSD-3-Clause), vendored in `wireguard/` with two local additions
-  (`wireguardif_shutdown`, an include-order fix).
+  (BSD-3-Clause), vendored in `wireguard/` with four local patches:
+  `wireguardif_shutdown`, an include-order fix, checksum regeneration before
+  encryption (lwIP 2.2's `ip4_forward` zeroes forwarded checksums expecting a
+  hardware NIC to refill them), and dual-stack (`LWIP_IPV6`) type fixes.
 - pico-sdk: BSD-3-Clause.
 
 This project: MIT.
+
+## Development
+
+- `make -C tests test` — 58 host-side tests: RFC-vector-anchored crypto
+  primitives (independent ChaCha20 reference, BLAKE2s, Poly1305, X25519),
+  AEAD cross-verification, base64, and a full two-device in-memory handshake.
+  `tests/fake_lwip/` stubs make `wireguard.c` compile on the host.
+- `build/pico-wg-bench.uf2` — on-device crypto/throughput bench (separate
+  firmware; prints over USB serial and UART).
+- The portal page is `web/index.html`, gzipped into the firmware at build
+  time by `tools/gen_web_page.py`.
