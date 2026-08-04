@@ -108,6 +108,31 @@ Reachability is engineered to survive any config state:
   link (same trust boundary as the serial console), and the private key is
   never included in any page, API response, or console output.
 
+### Mullvad, scripted
+
+`tools/provision-mullvad.py` takes a freshly-flashed dongle to a working
+Mullvad tunnel in one run: it prompts for the upstream Wi-Fi, has the dongle
+`genkey` (the private key never leaves it), registers the public key as a
+Mullvad device via the app API, prompts country → city and picks a random
+active relay, and configures full-gateway mode with Mullvad's in-tunnel DNS.
+The account number comes from a file argument or stdin; `--dry-run` previews
+without writing anything (to the dongle or to Mullvad).
+
+```sh
+python3 tools/provision-mullvad.py ~/.mullvad-account
+# or: echo "1234 5678 9012 3456" | python3 tools/provision-mullvad.py
+```
+
+Addressing subtlety, since Mullvad assigns one `/32` per device: that address
+goes to the **USB host** (the only party whose packets enter the tunnel), and
+the dongle's USB-side gateway address is a neighbouring address in the
+smallest enclosing subnet — link-local fiction that never appears on the wire
+toward Mullvad. This also means the USB host is the tunnel's one first-class
+client under Mullvad; the quarantine AP's client can't be covered by the same
+`/32` (point `apclient` at the assigned address *instead of* `hostip` if the
+AP client is the one you want tunnelled). Accounts hold at most 5 devices;
+the script offers to revoke one interactively when the limit is hit.
+
 ### The serial console
 
 The device enumerates the network interface, three CDC-ACM serial ports — the

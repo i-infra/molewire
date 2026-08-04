@@ -103,8 +103,9 @@ static void console_banner(void) {
   static const char banner[] =
       "\r\npico-wg-dongle " FW_VERSION " -- WireGuard USB dongle configuration console\r\n"
       "params: ssid pass country debug key peer psk endpoint addr hostip dns "
-      "keepalive mtu routes (set <param> <val>); genkey pubkey list use del scan "
-      "save restore reboot bootsel; Enter for status\r\n";
+      "keepalive mtu routes apssid appass apaddr apclient ap (set <param> <val>); "
+      "genkey pubkey pcap list use del scan save restore reboot bootsel; "
+      "Enter for status\r\n";
   console_put(banner, sizeof(banner) - 1);
   banner_sent = true;
 }
