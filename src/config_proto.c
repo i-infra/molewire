@@ -689,7 +689,7 @@ static void handle_main(const cfg_io_t *io, char *cmd, char *args, config_t *cfg
       g_apply(cfg);
     }
     if (g_apply_wg) {
-      g_apply_wg(cfg);
+      g_apply_wg(cfg); // also re-applies the AP (apply_wg calls ap_apply)
     }
     config_proto_dump(io, cfg);
   } else {

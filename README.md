@@ -16,18 +16,21 @@ Wi-Fi LAN, and the firmware fails closed: no tunnel, no forwarding.
                               Pico 2 W              │
                                           [wifi sta netif] ~~~ upstream Wi-Fi
                                           (outer UDP only)
+      AP client ~~802.11~~ [ap netif] ──forward──┘   (optional, one client)
 ```
 
 - **No NAT.** The host's DHCP lease *is* a tunnel address. The WireGuard peer's
   AllowedIPs on the server covers a small subnet (e.g. a `/30`): one address is
   the Pico (USB-side gateway), the other is leased to the host. Packets forward
-  between USB and tunnel with their addresses untouched.
+  between USB and tunnel with their addresses untouched. The optional
+  quarantine AP works the same way with a second small subnet.
 - **Isolation is structural, not a filter list.** An lwIP source-routing hook
   (`wg_ip4_route_hook` in `src/wg.c`) routes every *forwarded* packet either to
-  the USB link or into the WireGuard netif — never to the Wi-Fi station netif.
-  Before the tunnel exists, forwarded packets go to a blackhole. Only the
-  Pico's own traffic (DHCP client, DNS lookup of the endpoint, and the tunnel's
-  outer UDP, which is pinned to the station netif) can touch Wi-Fi.
+  its client link or into the WireGuard netif — never to the Wi-Fi station
+  netif, and never between the USB host and the AP client. Before the tunnel
+  exists, forwarded packets go to a blackhole. Only the Pico's own traffic
+  (DHCP client, DNS lookup of the endpoint, and the tunnel's outer UDP, which
+  is pinned to the station netif) can touch Wi-Fi.
 - **No DNS leaks.** The device runs no DNS forwarder at all. DHCP option 6
   hands the host the tunnel-side resolver; queries ride the tunnel like any
   other packet.
@@ -168,6 +171,40 @@ TCP MSS, which is what actually prevents black-holed connections.
 LED: solid = tunnel up; slow blink = associating/handshaking; fast blink =
 unprovisioned; off = USB not ready.
 
+## Quarantine access point
+
+The CYW43 can run an access point alongside its station uplink: **one**
+wireless client DHCPs a tunnel address and is routed through WireGuard
+exactly like the USB host — and nowhere else. The route hook confines
+AP-sourced packets to the tunnel (blackholed before it exists) and denies
+AP↔USB-host cross-talk in both directions; there is no path to your LAN
+because the route structurally does not exist, not because a filter blocks
+it. That makes it a bring-up pen for untrusted devices — point the tunnel at
+a commercial VPN endpoint and an IoT gadget gets internet with zero
+visibility of your network — and `pcap on` captures the AP link too, so you
+can watch exactly what the contained device does.
+
+Configure from the portal's AP card or the console:
+
+```
+set apssid quarantine
+set appass <8-63 chars>        # WPA2 only; an open AP is refused
+set apaddr 10.66.0.253/30      # device's AP-link address (tunnel space)
+set apclient 10.66.0.254       # the one client's address
+set ap on                      # (set ap off to stop)
+save
+```
+
+Like the USB pair, the AP pair must be covered by the server peer's
+AllowedIPs. Single-client is enforced three ways — the radio caps
+associations at one (`maxassoc`), the DHCP scope holds one lease, and the
+subnet is tiny — which is what keeps the whole device NAT-free.
+
+Physics disclaimer: AP and station share one radio (the AP always follows the
+station's channel), so every forwarded packet pays airtime and the gSPI bus
+twice. Expect roughly half the USB path's throughput; this feature is about
+isolation, not speed.
+
 ## Serial party line
 
 The third CDC-ACM port is a raw byte channel with three endpoints bridged
@@ -200,8 +237,8 @@ esptool --port rfc2217://<device-tunnel-ip>:3323 flash_id
 ## Packet capture
 
 `pcap on` (console or portal button) records the USB link — both directions,
-after checksum repair, i.e. the plaintext side of the tunnel — into a 64 KB
-RAM ring (snaplen 256, oldest evicted). Download it as a Wireshark-ready file
+after checksum repair, i.e. the plaintext side of the tunnel — and the
+quarantine AP link into a 64 KB RAM ring (snaplen 256, oldest evicted). Download it as a Wireshark-ready file
 from `/api/pcap`; timestamps are seconds-since-boot. This is the tool for
 "the host says it sent X, what did the dongle actually see" questions.
 
@@ -216,6 +253,10 @@ from `/api/pcap`; timestamps are seconds-since-boot. This is the tool for
   dongle as a compromised peer and rotate keys.
 - With `genkey`, the private key is generated on-device from the hardware TRNG
   and is never printed on any console or included in any status output.
+- The quarantine AP is WPA2-PSK only (an open AP would hand the tunnel to
+  anyone in radio range — the console refuses it), and its client can reach
+  the tunnel and nothing else: not the LAN, not the USB host, not the config
+  portal or serial bridge (both accept connections from their own links only).
 - IPv6 exists **only** as link-local on the USB link (it is the portal's
   stable address) and is deliberately unroutable: the Wi-Fi station netif has
   its auto-created v6 address stripped and SLAAC disabled, and v6 forwarding
