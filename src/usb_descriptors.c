@@ -267,14 +267,18 @@ enum {
 };
 
 // WebUSB landing page: Chromium-family browsers on macOS/Linux/ChromeOS show a
-// "Go to pico-wg.local to connect" notification when the dongle is plugged in
-// (disabled on Windows, crbug 656702; Safari/Firefox have no WebUSB). The
-// descriptor alone drives the prompt -- no WebUSB endpoints are implemented.
+// "Go to ..." notification when the dongle is plugged in (disabled on Windows,
+// crbug 656702; Safari/Firefox have no WebUSB). The descriptor alone drives
+// the prompt -- no WebUSB endpoints are implemented. The URL is the https
+// entry page (site/index.html): Chromium appears to suppress prompts for
+// plain-http landing pages, and the hosted page links/probes its way to the
+// on-device portal (navigation is mixed-content-exempt; the API probe uses
+// Local Network Access, which the portal's CORS preflight supports).
 static const tusb_desc_webusb_url_t desc_webusb_url = {
-  .bLength = 3 + sizeof("pico-wg.local") - 1,
+  .bLength = 3 + sizeof("infra.moe/x/wgpico.html") - 1,
   .bDescriptorType = 3, // WEBUSB URL type
-  .bScheme = 0,         // http://
-  .url = "pico-wg.local",
+  .bScheme = 1,         // https://
+  .url = "infra.moe/x/wgpico.html",
 };
 
 // BOS Descriptor is required for webUSB
