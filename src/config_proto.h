@@ -31,6 +31,12 @@
 //                         these subnets (max 4) route via the dongle (opt 121)
 //   set routes off        full-gateway mode: host default-routes through tunnel
 //   set dns off           offer the host no resolver (keep its own DNS)
+//   set apssid <text...>  quarantine AP's SSID
+//   set appass <text...>  quarantine AP's WPA2 password (8-63 chars; no open AP)
+//   set apaddr <a.b.c.d/nn>  device's AP-link address + prefix (e.g. /30)
+//   set apclient <a.b.c.d>   the tunnel address DHCP leases to the AP client
+//   set ap <on|off>       bring the quarantine AP up/down (needs the above set;
+//                         the AP pair must be inside the server's AllowedIPs)
 //   genkey [force]        generate the WireGuard keypair on-device (TRNG) and
 //                         print ONLY the public key; force replaces an
 //                         existing key (re-register with the server after)
@@ -75,6 +81,9 @@ void config_proto_set_apply(config_apply_fn cb);
 // Same, for WireGuard/addressing changes (re-address the USB link, restart the
 // DHCP server, re-create the tunnel).
 void config_proto_set_apply_wg(config_apply_fn cb);
+
+// Same, for quarantine-AP changes (bring the AP up/down to match the config).
+void config_proto_set_apply_ap(config_apply_fn cb);
 
 // Process one complete line (without its newline). The buffer is mutated in
 // place (tokenised). Call under the lwIP lock.

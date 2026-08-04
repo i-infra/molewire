@@ -63,16 +63,34 @@ typedef struct {
   wg_route_t routes[CONFIG_ROUTES_MAX]; // split-mode subnets for option 121
 } wg_config_t;
 
+// Quarantine access-point settings. The CYW43 runs an AP concurrently with the
+// station uplink; ONE wireless client gets client_addr over DHCP and is routed
+// through the tunnel exactly like the USB host -- and, by the route hook,
+// nowhere else (not the LAN, not the USB host). Single-client by design: the
+// AP pair is a second little subnet out of the tunnel space (covered by the
+// server's AllowedIPs), so no NAT exists anywhere in the device.
+typedef struct {
+  uint32_t addr;        // device's AP-link address, network order (0 = unset)
+  uint32_t client_addr; // the single client's address, network order
+  uint8_t prefix;       // AP-link subnet prefix length (e.g. 30)
+  uint8_t enabled;      // 1 = bring the AP up when the settings are complete
+  char ssid[CONFIG_SSID_MAX];
+  char password[CONFIG_PASS_MAX]; // WPA2-PSK, 8-63 chars; an open AP is refused
+  uint8_t _appad[1];
+} ap_config_t;
+
 // One saved network's credentials.
 typedef struct {
   char ssid[CONFIG_SSID_MAX];
   char password[CONFIG_PASS_MAX]; // WPA2-PSK passphrase ("" = open network)
 } wifi_profile_t;
 
-// The full configuration record, kept in the last flash sector. A change to this
-// layout just invalidates any record already in flash (the CRC/magic no longer
-// match), and the compile-time defaults are used until the next SAVE -- there is
-// no migration, by design.
+// The full configuration record, kept in the last flash sector. A change to
+// this layout invalidates any record already in flash (the CRC/magic no longer
+// match) and the compile-time defaults are used until the next SAVE -- except
+// for layouts that shipped in a tagged release, which config_load migrates
+// forward read-only (see config.c) so a reflash keeps the device's stored
+// WireGuard identity.
 typedef struct {
   uint32_t magic; // CONFIG_MAGIC
 
@@ -83,12 +101,18 @@ typedef struct {
   uint32_t country;       // CYW43 country code (e.g. CYW43_COUNTRY_WORLDWIDE)
   wifi_profile_t profiles[CONFIG_PROFILE_MAX];
   wg_config_t wg;
+  ap_config_t ap;
 
   uint32_t crc32; // CRC-32 over every preceding byte of this struct; MUST be last
 } config_t;
 
 // True when every field required to bring the tunnel up is present.
 bool config_wg_complete(const config_t *cfg);
+
+// True when every field required to bring the AP up is present and coherent
+// (SSID, a WPA2-length password, and an address pair inside one subnet). Does
+// NOT include the enabled flag -- that is the user's switch, this is validity.
+bool config_ap_complete(const config_t *cfg);
 
 // Fill cfg with the compile-time defaults (from wifi_config.h).
 void config_defaults(config_t *cfg);

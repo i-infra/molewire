@@ -1,9 +1,9 @@
-// Plaintext packet capture on the USB link, downloadable as a .pcap file.
+// Plaintext packet capture on the client links, downloadable as a .pcap file.
 //
-// A RAM ring holds the most recent traffic crossing the USB netif -- both
-// directions, after checksum repair, so it records exactly what the host and
-// the forwarding path see (the pre-encrypt / post-decrypt side of the
-// tunnel). Frames are stored as native pcap records (LINKTYPE_ETHERNET,
+// A RAM ring holds the most recent traffic crossing the USB netif (both
+// directions, after checksum repair) and the quarantine AP netif, so it
+// records exactly what the clients and the forwarding path see (the
+// pre-encrypt / post-decrypt side of the tunnel). Frames are stored as native pcap records (LINKTYPE_ETHERNET,
 // snaplen 256; original lengths preserved) so the download is a straight
 // dump of the ring. Timestamps are seconds-since-boot -- Wireshark shows
 // them relative to 1970, deltas are what matter.

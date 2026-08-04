@@ -2,9 +2,10 @@
 #define __LWIPOPTS_H__
 
 // lwIP configuration for the routed WireGuard dongle. Unlike pico-usb-wifi
-// (which bypassed lwIP entirely), lwIP here IS the datapath: three netifs
-// (USB, WireGuard, Wi-Fi station) with IP forwarding between USB and tunnel,
-// gated by the source-routing hook in lwip_hooks.h.
+// (which bypassed lwIP entirely), lwIP here IS the datapath: four netifs
+// (USB, WireGuard, Wi-Fi station, and the optional quarantine AP) with IP
+// forwarding between the client links and the tunnel, gated by the
+// source-routing hook in lwip_hooks.h.
 
 #ifndef NO_SYS
 #define NO_SYS 1

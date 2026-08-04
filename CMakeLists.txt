@@ -37,6 +37,7 @@ add_executable(pico-wg-dongle
     src/debug_console.c
     src/usb_net.c
     src/dhcp_server.c
+    src/ap.c
     src/wg.c
     src/http_portal.c
     src/pcap.c

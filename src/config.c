@@ -66,17 +66,47 @@ void config_defaults(config_t *cfg) {
 
 // --- load ---------------------------------------------------------------------
 
+// The v1.0 record layout, from before ap_config_t existed. Same magic; a v1.0
+// record is distinguished by its CRC verifying at the v1.0 offset. Read-only:
+// config_load migrates it forward so a firmware upgrade keeps the stored
+// identity (the on-device private key) and provisioning; the next SAVE writes
+// the current layout.
+typedef struct {
+  uint32_t magic;
+  uint8_t profile_count;
+  uint8_t active;
+  uint8_t debug_enabled;
+  uint8_t _pad;
+  uint32_t country;
+  wifi_profile_t profiles[CONFIG_PROFILE_MAX];
+  wg_config_t wg;
+  uint32_t crc32;
+} config_v1_t;
+
 void config_load(config_t *cfg) {
   const uint8_t *flash = (const uint8_t *)(XIP_BASE + CONFIG_FLASH_OFFSET);
   const config_t *stored = (const config_t *)flash;
 
-  // Accept the record only on an exact match of magic and CRC. Any layout change
-  // fails the CRC and falls back to defaults -- there is no migration.
+  // Accept the record only on an exact match of magic and CRC.
   if (stored->magic == CONFIG_MAGIC) {
     uint32_t stored_crc;
     memcpy(&stored_crc, flash + offsetof(config_t, crc32), 4u);
     if (crc32(flash, offsetof(config_t, crc32)) == stored_crc) {
       memcpy(cfg, flash, sizeof(*cfg));
+      return;
+    }
+    // Not the current layout -- try the v1.0 one before giving up.
+    const config_v1_t *v1 = (const config_v1_t *)flash;
+    memcpy(&stored_crc, flash + offsetof(config_v1_t, crc32), 4u);
+    if (crc32(flash, offsetof(config_v1_t, crc32)) == stored_crc) {
+      config_defaults(cfg);
+      cfg->profile_count = v1->profile_count;
+      cfg->active = v1->active;
+      cfg->debug_enabled = v1->debug_enabled;
+      cfg->country = v1->country;
+      memcpy(cfg->profiles, v1->profiles, sizeof(cfg->profiles));
+      cfg->wg = v1->wg;
+      // cfg->ap stays at defaults (AP off, unconfigured).
       return;
     }
   }
@@ -134,6 +164,22 @@ bool config_wg_complete(const config_t *cfg) {
   return w->private_key[0] && w->peer_public[0] && w->endpoint[0] &&
          w->endpoint_port != 0 && w->addr != 0 && w->host_addr != 0 &&
          w->prefix >= 8 && w->prefix <= 30;
+}
+
+bool config_ap_complete(const config_t *cfg) {
+  const ap_config_t *a = &cfg->ap;
+  size_t pw = strlen(a->password);
+  if (!a->ssid[0] || pw < 8 || pw > 63) { // WPA2-PSK only: an open AP would
+    return false;                         // hand the tunnel to anyone in range
+  }
+  if (!a->addr || !a->client_addr || a->addr == a->client_addr ||
+      a->prefix < 8 || a->prefix > 30) {
+    return false;
+  }
+  // Both addresses must sit in the one AP-link subnet (addresses are stored in
+  // network byte order; compare in host order so the mask math is sane).
+  uint32_t mask = 0xFFFFFFFFu << (32u - a->prefix);
+  return ((__builtin_bswap32(a->addr) ^ __builtin_bswap32(a->client_addr)) & mask) == 0;
 }
 
 // --- profile list operations --------------------------------------------------

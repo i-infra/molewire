@@ -118,6 +118,32 @@ placeholder="25"></div>
 </div>
 
 <div class="card">
+<h2>Access point (quarantine)</h2>
+<dl style="margin-bottom:.6rem"><dt>State</dt><dd><span id="apstate">…</span></dd></dl>
+<div class="row">
+<div><label for="f_apssid">SSID</label><input id="f_apssid" autocomplete="off"></div>
+<div><label for="f_appass">Password (8&ndash;63 chars)</label><input id="f_appass"
+type="password" autocomplete="off"></div>
+</div>
+<div class="row">
+<div><label for="f_apaddr">Device address (CIDR)</label>
+<input id="f_apaddr" class="mono" placeholder="10.66.0.253/30"></div>
+<div><label for="f_apclient">Client address</label>
+<input id="f_apclient" class="mono" placeholder="10.66.0.254"></div>
+</div>
+<div class="actions">
+<button id="apenable" class="primary">apply + enable</button>
+<button id="apdisable">disable</button>
+</div>
+<p style="color:var(--dim);font-size:.8rem;margin:.6rem 0 0">
+One wireless client gets a tunnel address and reaches only the WireGuard
+LAN&nbsp;&mdash; never your LAN, never the USB host. The address pair must be
+covered by the server&rsquo;s AllowedIPs, like the USB pair. Same radio as the
+uplink: expect roughly half the usual throughput. Enable pcap above to watch
+what the quarantined device does.</p>
+</div>
+
+<div class="card">
 <h2>Console</h2>
 <div class="actions" style="margin:0 0 .6rem">
 <button onclick="cmd('pcap on')">pcap on</button>
@@ -162,6 +188,10 @@ $("usb").textContent=`in ${j.usb.from_host}  out ${j.usb.to_host}`+
 (j.usb.txdrop?`  drop ${j.usb.txdrop}`:"");
 $("uptime").textContent=fmtUp(j.uptime_s);
 $("pubkey").textContent=j.wg.pubkey||"(no key — generate one)";
+$("apstate").textContent=j.ap.enabled?
+`on — ${j.ap.ssid}, ${j.ap.addr}/${j.ap.prefix} → ${j.ap.client}; client: `+
+(j.ap.stas?("associated"+(j.ap.leased?", leased":"")):"none"):
+"off";
 if(!filled){filled=true;
 $("f_ssid").value=j.wifi.ssid||"";
 $("f_ep").value=j.wg.endpoint||"";
@@ -171,7 +201,10 @@ $("f_hostip").value=j.wg.hostip||"";
 $("f_dns").value=j.wg.dns||"";
 $("f_mtu").value=j.wg.mtu||"";
 $("f_ka").value=j.wg.keepalive||"";
-$("f_routes").value=j.wg.routes.join(",");}
+$("f_routes").value=j.wg.routes.join(",");
+$("f_apssid").value=j.ap.ssid||"";
+$("f_apaddr").value=j.ap.addr?j.ap.addr+"/"+j.ap.prefix:"";
+$("f_apclient").value=j.ap.client||"";}
 }catch(e){
 if(!offlineSince)offlineSince=Date.now();
 document.body.classList.add("offline");
@@ -233,6 +266,18 @@ if(!L.length){log("(nothing to apply)");return}
 cmds(L)};
 
 $("save").onclick=()=>cmd("save");
+
+$("apenable").onclick=()=>{
+const v=id=>$(id).value.trim();
+const L=[];
+if(v("f_apssid"))L.push("set apssid "+v("f_apssid"));
+if($("f_appass").value)L.push("set appass "+$("f_appass").value);
+if(v("f_apaddr"))L.push("set apaddr "+v("f_apaddr"));
+if(v("f_apclient"))L.push("set apclient "+v("f_apclient"));
+L.push("set ap on");
+cmds(L)};
+
+$("apdisable").onclick=()=>cmd("set ap off");
 
 poll();setInterval(poll,2000);
 </script>

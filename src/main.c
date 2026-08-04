@@ -25,6 +25,7 @@
 
 #include <lwip/apps/mdns.h>
 
+#include "ap.h"
 #include "config.h"
 #include "config_proto.h"
 #include "debug_console.h"
@@ -121,19 +122,22 @@ static void apply_wifi(const config_t *cfg) {
 static void apply_wg(const config_t *cfg) {
   if (config_wg_complete(cfg)) {
     usb_net_set_addr(cfg->wg.addr, cfg->wg.prefix);
-    dhcp_server_start(usb_net_netif(), cfg->wg.host_addr, cfg->wg.prefix, cfg->wg.dns,
-                      cfg->wg.host_mtu ? cfg->wg.host_mtu : WIREGUARDIF_MTU, cfg->wg.routes,
-                      cfg->wg.route_count, false);
+    dhcp_server_start(&dhcp_usb, usb_net_netif(), cfg->wg.host_addr, cfg->wg.prefix,
+                      cfg->wg.dns, cfg->wg.host_mtu ? cfg->wg.host_mtu : WIREGUARDIF_MTU,
+                      cfg->wg.routes, cfg->wg.route_count, false);
     // MSS clamp = configured path MTU minus IP+TCP headers, so TCP fits even
     // when the host ignores/rejects the DHCP MTU (macOS floors at 1280).
     usb_net_set_mss_clamp(cfg->wg.host_mtu ? (uint16_t)(cfg->wg.host_mtu - 40) : 0);
   } else {
     usb_net_set_addr(BRINGUP_DEV_ADDR, BRINGUP_PREFIX);
-    dhcp_server_start(usb_net_netif(), BRINGUP_HOST_ADDR, BRINGUP_PREFIX, 0, 1500, NULL, 0,
-                      true);
+    dhcp_server_start(&dhcp_usb, usb_net_netif(), BRINGUP_HOST_ADDR, BRINGUP_PREFIX, 0,
+                      1500, NULL, 0, true);
     usb_net_set_mss_clamp(0);
   }
   wg_apply(cfg, &cyw43_state.netif[CYW43_ITF_STA]);
+  // The AP hands out the tunnel-side DNS/MTU, so it follows WireGuard changes
+  // too (ap_apply is a no-op when nothing it uses changed).
+  ap_apply(cfg);
   // Re-announce so hosts' mDNS caches follow the v4 re-addressing.
   cyw43_arch_lwip_begin();
   mdns_resp_announce(usb_net_netif());
@@ -232,6 +236,7 @@ int main(void) {
   serial_console_init(&cfg);
   config_proto_set_apply(apply_wifi);
   config_proto_set_apply_wg(apply_wg);
+  config_proto_set_apply_ap(ap_apply);
 
   if (config_active_ssid(&cfg)[0] == '\0') {
     printf("no Wi-Fi SSID configured; provision over the serial console\n");
@@ -305,7 +310,7 @@ int main(void) {
                    (unsigned long)s.from_host, (unsigned long)s.to_host,
                    (unsigned long)s.txdrop, (unsigned long)s.poolfail,
                    (unsigned long)usb_net_ring_recent_reset(), link, sta_ip, wg_state_str(),
-                   dhcp_server_leased() ? "yes" : "no", (unsigned long)crashlog.hangs,
+                   dhcp_server_leased(&dhcp_usb) ? "yes" : "no", (unsigned long)crashlog.hangs,
                    (unsigned long)crashlog.faults, (unsigned long)free_ram());
     }
 

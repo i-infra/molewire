@@ -13,6 +13,7 @@
 #include <pico/cyw43_arch.h> // CYW43_COUNTRY(...) / cyw43_state
 #include <tusb.h>            // tud_task to drain the goodbye message
 
+#include "ap.h" // AP client status for the dump
 #include "config.h"
 #include "config_proto.h"
 #include "dhcp_server.h"
@@ -30,9 +31,11 @@ static inline void out(const cfg_io_t *io, const char *s) { io->write(io->ctx, s
 
 static config_apply_fn g_apply;    // re-applies Wi-Fi config live (registered by main)
 static config_apply_fn g_apply_wg; // re-applies WireGuard/addressing config live
+static config_apply_fn g_apply_ap; // re-applies the quarantine AP config live
 
 void config_proto_set_apply(config_apply_fn cb) { g_apply = cb; }
 void config_proto_set_apply_wg(config_apply_fn cb) { g_apply_wg = cb; }
+void config_proto_set_apply_ap(config_apply_fn cb) { g_apply_ap = cb; }
 
 // Which menu the console is in. MODE_SCAN is entered by the SCAN command and
 // left by BACK or a successful JOIN. MODE_CONTSCAN is the live (continuous) scan,
@@ -211,6 +214,24 @@ void config_proto_dump(const cfg_io_t *io, const config_t *cfg) {
   } else {
     out(io, "    mode:       gateway -- host default-routes through the tunnel\n");
   }
+  const ap_config_t *ap = &cfg->ap;
+  if (ap->ssid[0] || ap->enabled) {
+    char ssid_disp[CONFIG_SSID_MAX];
+    fmt_ssid(ssid_disp, sizeof(ssid_disp), ap->ssid);
+    fmt_ip4(a, sizeof(a), ap->addr);
+    fmt_ip4(b, sizeof(b), ap->client_addr);
+    snprintf(line, sizeof(line), "    ap:         %s \"%s\" %s/%u -> %s\n",
+             ap->enabled ? "on" : "off", ssid_disp, ap->addr ? a : "?", ap->prefix,
+             ap->client_addr ? b : "?");
+    out(io, line);
+    if (ap->enabled) {
+      int stas = ap_client_count();
+      snprintf(line, sizeof(line), "    ap client:  %s%s\n",
+               stas ? "associated" : "none",
+               dhcp_server_leased(&dhcp_ap) ? ", leased" : "");
+      out(io, line);
+    }
+  }
   snprintf(line, sizeof(line), "    bridge:     uart1@%lu tcp :2323 raw :3323 rfc2217 (%s)\n",
            (unsigned long)serial_bridge_baud(),
            serial_bridge_client_connected() ? "client" : "no client");
@@ -223,7 +244,7 @@ void config_proto_dump(const cfg_io_t *io, const config_t *cfg) {
     out(io, line);
   }
   snprintf(line, sizeof(line), "    tunnel state: %s; host lease: %s\n", wg_state_str(),
-           dhcp_server_leased() ? "yes" : "no");
+           dhcp_server_leased(&dhcp_usb) ? "yes" : "no");
   out(io, line);
   if (!config_wg_complete(cfg)) {
     out(io, "    (wireguard not fully configured -- host traffic is blocked)\n");
@@ -298,7 +319,7 @@ static void start_scan(const cfg_io_t *io) {
 
 // --- SET ----------------------------------------------------------------------
 
-enum { SET_ERR, SET_WIFI, SET_OTHER, SET_WG }; // error / Wi-Fi / other / WireGuard
+enum { SET_ERR, SET_WIFI, SET_OTHER, SET_WG, SET_AP }; // error / Wi-Fi / other / WireGuard / AP
 
 // set key/peer/psk: store a validated base64 WireGuard key.
 static int set_wg_key(const cfg_io_t *io, char *field, size_t cap, const char *val,
@@ -480,9 +501,64 @@ static int cmd_set(const cfg_io_t *io, char *args, config_t *cfg) {
     }
     cfg->wg.host_mtu = (uint16_t)m;
     return SET_WG;
+  } else if (strcasecmp(args, "apssid") == 0) {
+    strncpy(cfg->ap.ssid, val, CONFIG_SSID_MAX - 1);
+    cfg->ap.ssid[CONFIG_SSID_MAX - 1] = '\0';
+    return SET_AP;
+  } else if (strcasecmp(args, "appass") == 0) {
+    size_t n = strlen(val);
+    if (n < 8 || n > 63) { // WPA2-PSK bounds; an open quarantine AP would hand
+      out(io, "ERR AP password must be 8-63 chars (an open AP is not allowed)\n");
+      return SET_ERR; //     the tunnel to anyone in radio range
+    }
+    strncpy(cfg->ap.password, val, CONFIG_PASS_MAX - 1);
+    cfg->ap.password[CONFIG_PASS_MAX - 1] = '\0';
+    return SET_AP;
+  } else if (strcasecmp(args, "apaddr") == 0) {
+    // "set apaddr <a.b.c.d/nn>" -- device's AP-link address + prefix
+    char *slash = strchr(val, '/');
+    if (slash == NULL) {
+      out(io, "ERR usage: set apaddr <a.b.c.d/nn> (e.g. 10.66.0.253/30)\n");
+      return SET_ERR;
+    }
+    *slash++ = '\0';
+    uint32_t a = parse_ip4(val);
+    long pfx = strtol(slash, NULL, 10);
+    if (!a || pfx < 8 || pfx > 30) {
+      out(io, "ERR bad address or prefix (prefix 8-30)\n");
+      return SET_ERR;
+    }
+    cfg->ap.addr = a;
+    cfg->ap.prefix = (uint8_t)pfx;
+    return SET_AP;
+  } else if (strcasecmp(args, "apclient") == 0) {
+    uint32_t a = parse_ip4(val);
+    if (!a) {
+      out(io, "ERR usage: set apclient <a.b.c.d>\n");
+      return SET_ERR;
+    }
+    cfg->ap.client_addr = a;
+    return SET_AP;
+  } else if (strcasecmp(args, "ap") == 0) {
+    if (strcasecmp(val, "off") == 0) {
+      cfg->ap.enabled = 0;
+      return SET_AP;
+    }
+    if (strcasecmp(val, "on") != 0) {
+      out(io, "ERR usage: set ap <on|off>\n");
+      return SET_ERR;
+    }
+    if (!config_ap_complete(cfg)) {
+      out(io, "ERR AP config incomplete -- need apssid, appass (8-63 chars), and an\n"
+              "    apaddr/apclient pair inside one subnet (both from tunnel space,\n"
+              "    covered by the server's AllowedIPs)\n");
+      return SET_ERR;
+    }
+    cfg->ap.enabled = 1;
+    return SET_AP;
   }
   out(io, "ERR unknown key (ssid|pass|country|debug|key|peer|psk|endpoint|addr|"
-          "hostip|dns|keepalive|mtu|routes)\n");
+          "hostip|dns|keepalive|mtu|routes|apssid|appass|apaddr|apclient|ap)\n");
   return SET_ERR;
 }
 
@@ -500,6 +576,9 @@ static void handle_main(const cfg_io_t *io, char *cmd, char *args, config_t *cfg
     } else if (r == SET_WG && g_apply_wg) {
       out(io, "[*] applying -- restarting tunnel\n");
       g_apply_wg(cfg); // re-address the USB link and re-create the tunnel
+    } else if (r == SET_AP && g_apply_ap) {
+      out(io, "[*] applying -- reconfiguring AP\n");
+      g_apply_ap(cfg); // bring the AP up/down to match (no-op if unchanged)
     } else if (r == SET_OTHER) {
       out(io, "[*] updated\n");
     }
@@ -615,9 +694,9 @@ static void handle_main(const cfg_io_t *io, char *cmd, char *args, config_t *cfg
     config_proto_dump(io, cfg);
   } else {
     out(io, "[!] commands: set <ssid|pass|country|debug|key|peer|psk|endpoint|addr|"
-            "hostip|dns|keepalive|mtu|routes> <val> | genkey [force] | pubkey | "
-            "pcap <on|off|clear> | list | use <n> | del <n> | scan | save | "
-            "restore | reboot | bootsel\n");
+            "hostip|dns|keepalive|mtu|routes|apssid|appass|apaddr|apclient|ap> <val> | "
+            "genkey [force] | pubkey | pcap <on|off|clear> | list | use <n> | "
+            "del <n> | scan | save | restore | reboot | bootsel\n");
   }
 }
 

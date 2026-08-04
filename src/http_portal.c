@@ -13,6 +13,7 @@
 #include <lwip/tcp.h>
 #include <pico/cyw43_arch.h>
 
+#include "ap.h" // AP status for /api/status
 #include "config.h"
 #include "config_proto.h"
 #include "dhcp_server.h"
@@ -140,7 +141,8 @@ static uint16_t status_json(char *o, uint16_t cap) {
   JADD(o, n, cap, "{\"version\":\"" FW_VERSION "\",\"uptime_s\":%lu,",
        (unsigned long)(to_ms_since_boot(get_absolute_time()) / 1000u));
   JADD(o, n, cap, "\"provisioned\":%s,\"leased\":%s,",
-       config_wg_complete(g_cfg) ? "true" : "false", dhcp_server_leased() ? "true" : "false");
+       config_wg_complete(g_cfg) ? "true" : "false",
+       dhcp_server_leased(&dhcp_usb) ? "true" : "false");
   JADD(o, n, cap, "\"wifi\":{\"ssid\":");
   n += (uint16_t)json_str(o + n, cap - n, config_active_ssid(g_cfg)); // bounded by cap
   JADD(o, n, cap, ",\"link\":%s,\"ip\":\"%s\"},", netif_is_link_up(sta) ? "true" : "false",
@@ -160,6 +162,15 @@ static uint16_t status_json(char *o, uint16_t cap) {
     JADD(o, n, cap, "%s\"%s/%u\"", i ? "," : "", net, w->routes[i].prefix);
   }
   JADD(o, n, cap, "]},");
+  const ap_config_t *apc = &g_cfg->ap;
+  char ap_addr[20], ap_client[20];
+  fmt_ip4_or_empty(ap_addr, sizeof(ap_addr), apc->addr);
+  fmt_ip4_or_empty(ap_client, sizeof(ap_client), apc->client_addr);
+  JADD(o, n, cap, "\"ap\":{\"enabled\":%s,\"ssid\":", apc->enabled ? "true" : "false");
+  n += (uint16_t)json_str(o + n, cap - n, apc->ssid); // bounded by cap
+  JADD(o, n, cap, ",\"addr\":\"%s\",\"prefix\":%u,\"client\":\"%s\",\"stas\":%d,\"leased\":%s},",
+       ap_addr, apc->prefix, ap_client, ap_client_count(),
+       dhcp_server_leased(&dhcp_ap) ? "true" : "false");
   JADD(o, n, cap,
        "\"usb\":{\"from_host\":%lu,\"to_host\":%lu,\"txdrop\":%lu,\"poolfail\":%lu}}",
        (unsigned long)s.from_host, (unsigned long)s.to_host, (unsigned long)s.txdrop,

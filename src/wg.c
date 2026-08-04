@@ -13,6 +13,7 @@
 #include <pico/rand.h>
 #include <pico/stdlib.h>
 
+#include "ap.h"     // AP netif for the route hook's client isolation
 #include "crypto.h" // wireguard_x25519 for on-device keypair generation
 #include "usb_net.h"
 #include "wg.h"
@@ -150,6 +151,15 @@ static bool in_usb_subnet(const ip4_addr_t *a) {
   return ip4_addr_net_eq(a, netif_ip4_addr(usb), netif_ip4_netmask(usb));
 }
 
+// True when a is inside the AP-link subnet (only while the AP is up).
+static bool in_ap_subnet(const ip4_addr_t *a) {
+  struct netif *ap = ap_active_netif();
+  if (!ap || ip4_addr_isany_val(*netif_ip4_addr(ap))) {
+    return false;
+  }
+  return ip4_addr_net_eq(a, netif_ip4_addr(ap), netif_ip4_netmask(ap));
+}
+
 static bool is_own_addr(const ip4_addr_t *a) {
   struct netif *n;
   NETIF_FOREACH(n) {
@@ -166,14 +176,21 @@ static bool is_own_addr(const ip4_addr_t *a) {
 // addresses) returns NULL and routes normally: the station netif stays usable
 // for DHCP, endpoint DNS, and the tunnel's outer UDP (which is pinned to the
 // station PCB anyway). Everything else is forwarded traffic and is confined to
-// the USB link or the tunnel; with no tunnel interface it is blackholed. This
-// is the property "the host can only ever reach the WireGuard LAN".
+// its client link and the tunnel; with no tunnel interface it is blackholed.
+// This is the property "a client can only ever reach the WireGuard LAN" --
+// and the USB host and AP client cannot reach each other: each client's
+// packets may exit only via the tunnel, never the other client's link.
 struct netif *wg_ip4_route_hook(const struct ip4_addr *src, const struct ip4_addr *dest) {
   if (src == NULL || ip4_addr_isany(src) || is_own_addr(src)) {
     return NULL; // our own traffic: normal routing
   }
   if (in_usb_subnet(dest)) {
-    return usb_net_netif(); // delivery toward the host
+    // Delivery toward the USB host -- unless it came from the AP client.
+    return in_ap_subnet(src) ? &blackhole_netif : usb_net_netif();
+  }
+  if (in_ap_subnet(dest)) {
+    // Delivery toward the AP client -- unless it came from the USB host.
+    return in_usb_subnet(src) ? &blackhole_netif : ap_active_netif();
   }
   if (wg_netif_added) {
     return &wg_netif; // into the tunnel (drops until the session is up)
