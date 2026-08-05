@@ -55,12 +55,17 @@ uint32_t usb_net_ring_recent_reset(void);
 // servers regardless of the host's interface MTU.
 void usb_net_set_mss_clamp(uint16_t mss);
 
-// Schedule a logical replug (USB disconnect + reconnect) a moment from now:
-// after the USB-link subnet changes (bring-up island <-> tunnel pair), this
-// makes the host drop its stale DHCP lease and re-acquire on the new subnet
-// by itself. Deferred ~700 ms so replies to the command that triggered the
-// re-address can still reach the host first.
+// Schedule a logical replug (USB disconnect + reconnect) a few seconds from
+// now: after the USB-link subnet changes (bring-up island <-> tunnel pair),
+// this makes the host drop its stale DHCP lease and re-acquire on the new
+// subnet by itself. Each call re-arms the timer, so a provisioning burst
+// (which talks over the very CDC ports the replug yanks) postpones the bounce
+// until its commands have gone quiet.
 void usb_net_schedule_bounce(void);
+
+// True while a scheduled bounce has not fired yet (so config applies can keep
+// re-arming it).
+bool usb_net_bounce_pending(void);
 
 #ifdef __cplusplus
 }

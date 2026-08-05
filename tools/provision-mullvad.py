@@ -402,11 +402,35 @@ def main():
                 "(the dongle holds partial unsaved config; 'restore' resets it)")
     print("[*] configuration saved to flash")
 
-    print("[*] waiting for the tunnel", end="", flush=True)
+    # A few seconds after the last command the dongle replugs its USB link so
+    # the host re-DHCPs onto the new subnet -- taking this console with it.
+    # Ride through the disappearance and reopen when it re-enumerates.
+    port = con.port
+    print("[*] waiting for the tunnel (the USB link will briefly replug)",
+          end="", flush=True)
     state = "?"
-    for _ in range(30):
+    deadline = time.time() + 90
+    while time.time() < deadline:
         time.sleep(2)
-        dump = con.cmd("")
+        try:
+            dump = con.cmd("")
+        except OSError:
+            print("~", end="", flush=True)
+            try:
+                con.close()
+            except OSError:
+                pass
+            con = None
+            for _ in range(20):
+                time.sleep(1)
+                try:
+                    con = Console(port)
+                    break
+                except OSError:
+                    continue
+            if con is None:
+                die(f"\nconsole did not come back after the replug ({port})")
+            continue
         m = re.search(r"tunnel state: (\w+)", dump)
         state = m.group(1) if m else "?"
         if state == "up":

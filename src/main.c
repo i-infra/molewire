@@ -146,10 +146,13 @@ static void apply_wg(const config_t *cfg) {
   // If the USB-link subnet itself changed (island <-> tunnel pair), schedule a
   // logical replug so the host re-DHCPs onto it without a manual reboot. Not
   // on the boot-time apply -- the host is still enumerating the device then.
+  // While a bounce is pending, every further apply re-arms it: a provisioning
+  // burst (each `set` lands here) pushes the replug past its own last command,
+  // so the console it is talking over isn't yanked mid-conversation.
   uint32_t now_addr = config_wg_complete(cfg) ? cfg->wg.addr : BRINGUP_DEV_ADDR;
   static uint32_t applied_addr;
   static bool applied_once;
-  if (applied_once && now_addr != applied_addr) {
+  if (applied_once && (now_addr != applied_addr || usb_net_bounce_pending())) {
     usb_net_schedule_bounce();
   }
   applied_once = true;

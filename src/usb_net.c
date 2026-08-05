@@ -338,12 +338,21 @@ struct netif *usb_net_netif(void) { return &usb_netif; }
 // Deferred logical replug (see usb_net.h). This TinyUSB has no runtime NCM
 // link-state control, so the whole device detaches and re-attaches -- which
 // is also the only signal that reliably makes every host re-run DHCP.
+//
+// The delay is generous, and each call re-arms it: the replug yanks the CDC
+// consoles along with the network, and a provisioning burst (script or
+// portal) keeps issuing commands for several seconds after the re-address
+// that scheduled the bounce. Firing mid-burst cost a user a manual DHCP kick
+// once -- so the bounce waits until the config traffic has been quiet.
+#define BOUNCE_DELAY_MS 5000u
 static uint32_t bounce_at_ms;    // 0 = idle
 static uint32_t reconnect_at_ms; // 0 = idle
 
 void usb_net_schedule_bounce(void) {
-  bounce_at_ms = to_ms_since_boot(get_absolute_time()) + 700u;
+  bounce_at_ms = to_ms_since_boot(get_absolute_time()) + BOUNCE_DELAY_MS;
 }
+
+bool usb_net_bounce_pending(void) { return bounce_at_ms != 0; }
 
 void usb_net_update(void) {
   uint32_t now = to_ms_since_boot(get_absolute_time());
