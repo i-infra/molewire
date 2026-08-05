@@ -31,6 +31,7 @@ Stdlib only (no pyserial); POSIX (macOS/Linux).
 """
 
 import argparse
+import getpass
 import glob
 import ipaddress
 import json
@@ -348,7 +349,9 @@ def main():
     ssid, password = args.ssid, args.password
     if wifi_unset and not ssid and not args.dry_run:
         ssid = ask("Wi-Fi SSID for the upstream network: ")
-        password = ask("Wi-Fi password (empty = open network): ")
+        # getpass reads from /dev/tty without echo, so the password lands in
+        # neither scrollback nor screenshots.
+        password = getpass.getpass("Wi-Fi password (empty = open network): ")
 
     pubkey, generated = console_pubkey(con, allow_genkey=not args.dry_run)
     if pubkey:
