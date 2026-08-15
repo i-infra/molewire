@@ -91,6 +91,27 @@ struct netif *wg_ip4_route_hook(const struct ip4_addr *src, const struct ip4_add
 #define IP_FRAG 1
 #define IP_REASSEMBLY 1
 
+// L4 checksum generation OFF -- this is a router first. lwIP 2.2's
+// ip4_forward treats compile-time CHECKSUM_GEN_{TCP,UDP,ICMP} as "the netifs
+// do checksum offload" and ZEROES the L4 checksum of every forwarded packet,
+// with no fragment guard: a datagram we fragment goes out with checksum 0
+// (fatal for ICMP/TCP; UDP survives only because 0 is "no checksum" in v4),
+// and a transiting non-first fragment gets two PAYLOAD bytes zeroed -- silent
+// corruption that made every fragmented flow through the tunnel die (mosh).
+// With these off, forwarded traffic keeps its origin checksums end to end and
+// ip4_frag behaves like a normal router. The cost: packets the device ITSELF
+// originates leave the stack with L4 checksum 0, so every egress hop restores
+// them -- fix_host_checksums (usb_net.c) toward the host,
+// wireguardif_fix_checksums into the tunnel, eth_csum_restore (eth_csum.c) on
+// the Wi-Fi station and quarantine-AP links. CHECKSUM_GEN_IP stays on
+// (default): local IP headers and ip4_frag's per-fragment headers need it,
+// and the forward-path IP-checksum zeroing it causes is restored per packet
+// by those same hops. CHECKSUM_CHECK_* stay on (default): inbound validation
+// for traffic addressed to the device is unaffected.
+#define CHECKSUM_GEN_TCP 0
+#define CHECKSUM_GEN_UDP 0
+#define CHECKSUM_GEN_ICMP 0
+
 // PCBs: WireGuard outer + DHCP server + DHCP client + DNS + mDNS, headroom.
 #define MEMP_NUM_UDP_PCB 8
 // Timers: cyw43 + DHCP + DNS + ARP + IP-reass + the wireguardif 400 ms timer,

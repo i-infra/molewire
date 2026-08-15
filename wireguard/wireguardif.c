@@ -219,15 +219,17 @@ static err_t wireguardif_output_to_peer(struct netif *netif, struct pbuf *q, con
 					// Copy pbuf to memory - handles case where pbuf is chained
 					pbuf_copy_partial(q, dst, unpadded_len, 0);
 
-					// Local addition (pico-wg-dongle): lwIP 2.2's ip4_forward
-					// ZEROES the IP and L4 checksums of every forwarded packet
-					// (its "checksum offload" handling triggers whenever
-					// CHECKSUM_GEN_* is enabled), expecting the output driver
-					// to regenerate them. An Ethernet driver would; a tunnel
-					// encrypts the packet verbatim, so the zeros would be
-					// sealed inside and the far end's kernel discards the
-					// datagram as malformed. Regenerate them here, on the
-					// contiguous copy, just before encryption.
+					// Local addition (pico-wg-dongle): packets built by the
+					// local stack carry zero L4 checksums (CHECKSUM_GEN_TCP/
+					// UDP/ICMP are 0 in lwipopts.h so ip4_forward stops
+					// zeroing TRANSIT packets' checksums -- fatal once
+					// fragmentation is involved). A tunnel encrypts the
+					// packet verbatim, sealing any zeros inside for the far
+					// end's kernel to reject, so regenerate them here, on the
+					// contiguous copy, just before encryption. Forwarded
+					// traffic now arrives with valid origin checksums and
+					// passes through untouched; ip4_forward's IP-header
+					// zeroing (CHECKSUM_GEN_IP stays on) is restored too.
 					wireguardif_fix_checksums(dst, unpadded_len);
 				}
 

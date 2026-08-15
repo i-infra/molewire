@@ -30,6 +30,7 @@
 #include "config_proto.h"
 #include "debug_console.h"
 #include "dhcp_server.h"
+#include "eth_csum.h"
 #include "http_portal.h"
 #include "serial_bridge.h"
 #include "serial_console.h"
@@ -195,6 +196,12 @@ int main(void) {
   }
   cyw43_arch_enable_sta_mode();
   struct netif *sta = &cyw43_state.netif[CYW43_ITF_STA];
+
+  // Locally-originated packets leave the stack with L4 checksum 0 (checksum
+  // generation is compiled out so lwIP's forward path stops zeroing transit
+  // traffic -- see lwipopts.h); restore them at the radio egress. The USB and
+  // tunnel egress hops have their own restorers.
+  eth_csum_wrap(sta);
 
   // The cyw43 glue gives the station netif a v6 link-local address and enables
   // SLAAC. Strip both: v6 belongs to the USB link only -- the Wi-Fi side must

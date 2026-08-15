@@ -8,6 +8,7 @@
 
 #include "ap.h"
 #include "dhcp_server.h"
+#include "eth_csum.h"
 #include "pcap.h"
 #include "wg.h"
 #include "wireguardif.h" // WIREGUARDIF_MTU for the DHCP option
@@ -56,6 +57,10 @@ static err_t ap_input_tap(struct pbuf *p, struct netif *inp) {
 }
 
 static err_t ap_linkoutput_tap(struct netif *n, struct pbuf *p) {
+  // Device-originated frames (DHCP offers, ICMP/TCP replies to the client)
+  // carry zero L4 checksums until an egress hop restores them (lwipopts.h);
+  // do it before the tap so the capture shows what actually hits the air.
+  eth_csum_restore(p);
   tap_frame(p);
   return orig_linkoutput(n, p);
 }

@@ -20,6 +20,7 @@
 #include "debug_console.h"
 #include "pcap.h"
 #include "usb_net.h"
+#include "wg.h" // wg_path_mtu for the frag-needed next-hop-MTU stamp
 
 // The MAC TinyUSB reports in the NCM iMACAddress string descriptor -- the
 // address the HOST's interface adopts. Derived from the flash unique ID; the
@@ -219,6 +220,17 @@ static void fix_host_checksums(uint8_t *f, uint16_t flen) {
   uint8_t *l4 = ip + ihl;
   uint16_t l4len = (uint16_t)(tot - ihl);
   if (proto == 1 && l4len >= 8 && l4[2] == 0 && l4[3] == 0) { // ICMP
+    // A zero checksum marks this as OUR icmp (forwarded ICMP keeps its valid
+    // origin checksum now that lwIP's forward path no longer zeroes L4 --
+    // see lwipopts.h). lwIP never fills the next-hop-MTU field of the
+    // frag-needed it generates (type 3 code 4), which leaves host PMTUD
+    // guessing at plateaus; stamp the real tunnel path MTU before sealing
+    // the checksum.
+    if (l4[0] == 3 && l4[1] == 4 && l4[6] == 0 && l4[7] == 0) {
+      uint16_t mtu = wg_path_mtu();
+      l4[6] = (uint8_t)(mtu >> 8);
+      l4[7] = (uint8_t)mtu;
+    }
     uint16_t c = csum_finish(csum_add(0, l4, l4len));
     l4[2] = (uint8_t)(c >> 8);
     l4[3] = (uint8_t)c;
@@ -234,8 +246,18 @@ static void fix_host_checksums(uint8_t *f, uint16_t flen) {
       l4[16] = (uint8_t)(c >> 8);
       l4[17] = (uint8_t)c;
     }
+  } else if (proto == 17 && l4len >= 8 && l4[6] == 0 && l4[7] == 0) { // UDP
+    // Zero would be legal ("no checksum"), but our own DHCP/mDNS ride here
+    // now that the stack no longer generates checksums; restore the real one.
+    uint32_t s = csum_add(0, ip + 12, 8);
+    s += (uint32_t)proto + l4len;
+    uint16_t c = csum_finish(csum_add(s, l4, l4len));
+    if (c == 0) {
+      c = 0xFFFF; // RFC 768: transmitted 0 means "none"; use the alternate form
+    }
+    l4[6] = (uint8_t)(c >> 8);
+    l4[7] = (uint8_t)c;
   }
-  // UDP checksum 0 is legal over IPv4 (RFC 768) -- leave it alone.
 }
 
 // --- TinyUSB network callbacks -------------------------------------------------
@@ -272,10 +294,13 @@ uint16_t tud_network_xmit_cb(uint8_t *dst, void *ref, uint16_t arg) {
   struct pbuf *p = (struct pbuf *)ref;
   (void)arg;
   uint16_t n = pbuf_copy_partial(p, dst, p->tot_len, 0);
-  // Mirror of the wireguardif.c egress patch: lwIP's ip4_forward zeroes the
-  // checksums of tunnel->host packets too, and the host's stack silently
-  // drops zero-checksum datagrams. The frame is a contiguous copy here, so
-  // regenerate any zeroed checksums before it goes over USB.
+  // Mirror of the wireguardif.c egress patch: locally-originated packets
+  // (portal TCP, DHCP/mDNS, our ICMP errors) leave the stack with zero L4
+  // checksums (lwipopts.h disables generation so ip4_forward stops zeroing
+  // TRANSIT traffic), and the host's stack silently drops zero-checksum
+  // TCP/ICMP. The frame is a contiguous copy here, so regenerate any zeroed
+  // checksums -- forwarded packets keep their valid origin checksums and
+  // pass untouched -- before it goes over USB.
   fix_host_checksums(dst, n);
   pcap_capture(dst, n); // record exactly what the host receives
   return n;
