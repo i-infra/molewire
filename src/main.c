@@ -35,7 +35,7 @@
 #include "serial_console.h"
 #include "usb_net.h"
 #include "wg.h"
-#include "wifi_scan.h"
+#include "wifi_conn.h"
 #include "wireguardif.h" // WIREGUARDIF_MTU for the DHCP option
 
 // Bring-up island addressing, used while the WireGuard config is incomplete:
@@ -96,22 +96,6 @@ void __attribute__((naked, used)) isr_hardfault(void) {
       "    ldr r2, =fault_capture \n"
       "    bx  r2          \n"
       "    .ltorg          \n");
-}
-
-// Auth for the active profile: WPA2/WPA3 transition mode, or open for an empty
-// password.
-static uint32_t active_auth(const config_t *cfg) {
-  return config_active_pass(cfg)[0] ? CYW43_AUTH_WPA3_WPA2_AES_PSK : CYW43_AUTH_OPEN;
-}
-
-// Apply Wi-Fi config immediately: drop any association and re-join with the
-// active profile's credentials. Registered with the control protocol.
-static void apply_wifi(const config_t *cfg) {
-  cyw43_wifi_leave(&cyw43_state, CYW43_ITF_STA);
-  const char *ssid = config_active_ssid(cfg);
-  if (ssid[0]) {
-    cyw43_arch_wifi_connect_async(ssid, config_active_pass(cfg), active_auth(cfg));
-  }
 }
 
 // Apply WireGuard/addressing config immediately: re-address the USB link,
@@ -237,17 +221,14 @@ int main(void) {
   http_portal_init(&cfg);
   serial_bridge_init();
   serial_console_init(&cfg);
-  config_proto_set_apply(apply_wifi);
+  config_proto_set_apply(wifi_conn_apply);
   config_proto_set_apply_wg(apply_wg);
   config_proto_set_apply_ap(ap_apply);
 
-  if (config_active_ssid(&cfg)[0] == '\0') {
-    printf("no Wi-Fi SSID configured; provision over the serial console\n");
-  } else {
-    printf("associating to '%s' ...\n", config_active_ssid(&cfg));
-    cyw43_arch_wifi_connect_async(config_active_ssid(&cfg), config_active_pass(&cfg),
-                                  active_auth(&cfg));
-  }
+  // The connection manager owns station association from here on: it joins
+  // the active profile now, and falls back to scan-and-pick across all saved
+  // profiles whenever that (or any later association) fails.
+  wifi_conn_init(&cfg);
 
   apply_wg(&cfg);
   printf("setup complete\n");
@@ -256,10 +237,8 @@ int main(void) {
 
   int key = 0;
   uint32_t last_led = 0;
-  uint32_t last_join = 0;
   uint32_t last_dbg = 0;
   uint32_t last_wg_poll = 0;
-  bool was_up = false;
   bool was_wg_up = false;
   bool led_on = false;
   bool hang_reported = false;
@@ -271,6 +250,7 @@ int main(void) {
     serial_bridge_task();  // CDC <-> UART1 <-> TCP party line
 
     uint32_t now = to_ms_since_boot(get_absolute_time());
+    wifi_conn_task(now); // station association state machine (rate-limited)
 
     if (now - last_wg_poll >= 1000u) {
       last_wg_poll = now;
@@ -342,8 +322,9 @@ int main(void) {
       crashlog.ring_max = cs.ring_max;
 
       bool usb_ok = usb_net_is_up();
-      bool wifi_link = netif_is_link_up(sta);
-      bool provisioned = config_active_ssid(&cfg)[0] != '\0' && config_wg_complete(&cfg);
+      // With multi-profile auto-join, "Wi-Fi provisioned" means any saved
+      // network at all -- the manager finds whichever one is in range.
+      bool provisioned = cfg.profile_count > 0 && config_wg_complete(&cfg);
       bool on;
       if (!usb_ok) {
         on = false;
@@ -356,19 +337,6 @@ int main(void) {
       }
       cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN, on);
       led_on = on;
-
-      if (wifi_link && !was_up) {
-        if (cfg.debug_enabled) debug_printf("associated to %s\n", config_active_ssid(&cfg));
-      } else if (!wifi_link && was_up) {
-        if (cfg.debug_enabled) debug_printf("Wi-Fi link down\n");
-      }
-      was_up = wifi_link;
-      if (!wifi_link && config_active_ssid(&cfg)[0] && !wifi_scan_in_progress() &&
-          (now - last_join >= 10000u)) {
-        last_join = now;
-        cyw43_arch_wifi_connect_async(config_active_ssid(&cfg), config_active_pass(&cfg),
-                                      active_auth(&cfg));
-      }
     }
 
     key = getchar_timeout_us(0);

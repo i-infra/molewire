@@ -20,6 +20,7 @@
 #include "pcap.h"          // capture toggle + status for the dump
 #include "serial_bridge.h" // bridge status for the dump
 #include "wg.h"
+#include "wifi_conn.h" // per-profile status/RSSI annotations, creds-unsaved flag
 #include "wifi_scan.h"
 #include "wireguard.h" // base64 validation of keys
 
@@ -48,9 +49,13 @@ static enum { MODE_MAIN, MODE_SCAN, MODE_CONTSCAN } g_mode;
 static uint8_t scan_rounds; // passes remaining in a single-scan session, 0 = idle
 
 void config_proto_reset(void) {
+  // Only stop a scan this console started: a manager (wifi_conn) scan may be
+  // in flight, and clearing its latch here would eat its completion.
+  if (scan_rounds > 0 || g_mode == MODE_CONTSCAN) {
+    wifi_scan_stop(); // drop the scan latch so association can resume
+  }
   g_mode = MODE_MAIN;
   scan_rounds = 0;
-  wifi_scan_stop(); // drop any scan latch so association can resume
 }
 
 // --- helpers ------------------------------------------------------------------
@@ -161,7 +166,9 @@ void config_proto_dump(const cfg_io_t *io, const config_t *cfg) {
   snprintf(line, sizeof(line), "    country:    %s\n", cc);
   out(io, line);
   out(io, cfg->debug_enabled ? "    debug:      on\n" : "    debug:      off\n");
-  out(io, assoc ? "    wifi:       associated\n" : "    wifi:       associating\n");
+  snprintf(line, sizeof(line), "    wifi:       %s\n",
+           assoc ? "associated" : wifi_conn_state_str());
+  out(io, line);
 
   const wg_config_t *w = &cfg->wg;
   char a[16], b[16], pub[48];
@@ -253,26 +260,48 @@ void config_proto_dump(const cfg_io_t *io, const config_t *cfg) {
 
 // --- list views ---------------------------------------------------------------
 
+// One profile's runtime annotation: connection/attempt state, or how the
+// latest scan saw it. Empty until anything is known.
+static void prof_note(char *o, size_t n, uint8_t i) {
+  wifi_prof_status_t st = wifi_conn_prof_status(i);
+  int16_t rssi = wifi_conn_prof_rssi(i);
+  if (st == WIFI_PROF_CONNECTED) {
+    snprintf(o, n, rssi != WIFI_RSSI_UNSEEN ? "connected, %d dBm" : "connected", rssi);
+  } else if (st == WIFI_PROF_BADPASS) {
+    snprintf(o, n, "bad password?");
+  } else if (rssi != WIFI_RSSI_UNSEEN) {
+    snprintf(o, n, st == WIFI_PROF_NOJOIN ? "%d dBm, couldn't join" : "%d dBm", rssi);
+  } else if (wifi_conn_scan_age_ms() != UINT32_MAX) {
+    snprintf(o, n, st == WIFI_PROF_NOJOIN ? "not seen, couldn't join" : "not seen");
+  } else {
+    o[0] = '\0';
+  }
+}
+
 static void list_profiles(const cfg_io_t *io, const config_t *cfg) {
-  char line[96], ssid[CONFIG_SSID_MAX];
+  char line[112], ssid[CONFIG_SSID_MAX], note[32];
   if (cfg->profile_count == 0) {
-    out(io, "    (no saved profiles -- set ssid/pass or scan to add one)\n");
+    out(io, "    (no saved profiles -- scan, or set ssid/pass to add one)\n");
     return;
   }
-  snprintf(line, sizeof(line), "    profiles (%u/%u):\n", cfg->profile_count, CONFIG_PROFILE_MAX);
+  snprintf(line, sizeof(line), "    profiles (%u/%u, most recent first):\n",
+           cfg->profile_count, CONFIG_PROFILE_MAX);
   out(io, line);
   for (uint8_t i = 0; i < cfg->profile_count; i++) {
     fmt_ssid(ssid, sizeof(ssid), cfg->profiles[i].ssid);
-    snprintf(line, sizeof(line), "      %u%c %s%s\n", i + 1,
+    prof_note(note, sizeof(note), i);
+    snprintf(line, sizeof(line), "      %u%c %-20s%s%s%s%s\n", i + 1,
              i == cfg->active ? '*' : ' ', ssid,
-             cfg->profiles[i].password[0] ? "" : "  (open)");
+             cfg->profiles[i].password[0] ? "" : "  (open)",
+             note[0] ? "  (" : "", note, note[0] ? ")" : "");
     out(io, line);
   }
   out(io, "    (* = active)\n");
 }
 
-static void list_scan(const cfg_io_t *io) {
-  char line[96], ssid[CONFIG_SSID_MAX];
+static void list_scan(const cfg_io_t *io, const config_t *cfg) {
+  char line[112], ssid[CONFIG_SSID_MAX];
+  bool assoc = netif_is_link_up(&cyw43_state.netif[CYW43_ITF_STA]);
   uint8_t n = wifi_scan_count();
   if (n == 0) {
     out(io, "    (no networks found -- scan to try again)\n");
@@ -282,10 +311,23 @@ static void list_scan(const cfg_io_t *io) {
     for (uint8_t i = 0; i < n; i++) {
       const wifi_scan_entry_t *e = wifi_scan_get(i);
       fmt_ssid(ssid, sizeof(ssid), e->ssid);
+      int p = config_find_profile(cfg, e->ssid);
+      const char *mark = "";
+      if (p >= 0) {
+        if ((uint8_t)p == cfg->active && assoc) {
+          mark = "  [connected]";
+        } else if (wifi_conn_prof_status((uint8_t)p) == WIFI_PROF_BADPASS) {
+          mark = "  [saved, bad password?]";
+        } else {
+          mark = "  [saved]";
+        }
+      } else if (e->auth == 0) {
+        mark = "  [open]";
+      }
       snprintf(line, sizeof(line),
-               "      %2u  %-20s  %4d dBm  %02x:%02x:%02x:%02x:%02x:%02x\n", i + 1,
+               "      %2u  %-20s  %4d dBm  %02x:%02x:%02x:%02x:%02x:%02x%s\n", i + 1,
                ssid, e->rssi, e->bssid[0], e->bssid[1], e->bssid[2], e->bssid[3],
-               e->bssid[4], e->bssid[5]);
+               e->bssid[4], e->bssid[5], mark);
       out(io, line);
     }
   }
@@ -314,6 +356,44 @@ static void start_scan(const cfg_io_t *io) {
     out(io, "[*] scanning"); // a dot is appended as each pass completes
   } else {
     out(io, "[!] scan failed to start\n");
+  }
+}
+
+// Select-or-create the profile for `ssid` and join it now if the credentials
+// suffice: a stored password, or the latest scan saw the network as open.
+// Otherwise the profile is staged and the caller is told to set the password
+// (which applies on its own). open_hint: 1 = open, 0 = secured, -1 = look it
+// up in the scan results.
+static void join_ssid(const cfg_io_t *io, config_t *cfg, const char *ssid, int open_hint) {
+  int p = config_find_profile(cfg, ssid);
+  if (p < 0) {
+    p = config_add_profile(cfg, ssid); // a full list evicts its LRU tail
+    if (p < 0) {
+      out(io, "ERR could not add a profile\n");
+      return;
+    }
+    // New credentials: once a join with them succeeds, persist automatically.
+    wifi_conn_mark_creds_unsaved();
+  }
+  cfg->active = (uint8_t)p;
+  if (open_hint < 0) {
+    open_hint = 0; // unknown networks are assumed secured (hidden SSIDs etc.)
+    for (uint8_t i = 0; i < wifi_scan_count(); i++) {
+      const wifi_scan_entry_t *e = wifi_scan_get(i);
+      if (strncmp(e->ssid, ssid, CONFIG_SSID_MAX) == 0) {
+        open_hint = e->auth == 0;
+        break;
+      }
+    }
+  }
+  if (cfg->profiles[p].password[0] || open_hint == 1) {
+    out(io, cfg->profiles[p].password[0] ? "[*] joining with the saved password\n"
+                                         : "[*] joining (open network)\n");
+    if (g_apply) {
+      g_apply(cfg);
+    }
+  } else {
+    out(io, "[*] staged -- set pass <password> to join (saved automatically once it works)\n");
   }
 }
 
@@ -347,25 +427,28 @@ static int cmd_set(const cfg_io_t *io, char *args, config_t *cfg) {
 
   if (strcasecmp(args, "ssid") == 0) {
     // Edit the active profile's SSID, or create the first profile if none.
+    // (To ADD a network rather than rename the active one, use `join <ssid>`.)
     if (cfg->active < cfg->profile_count) {
       strncpy(cfg->profiles[cfg->active].ssid, val, CONFIG_SSID_MAX - 1);
       cfg->profiles[cfg->active].ssid[CONFIG_SSID_MAX - 1] = '\0';
     } else {
       int i = config_add_profile(cfg, val);
       if (i < 0) {
-        out(io, "ERR profile list full -- del one first\n");
+        out(io, "ERR could not add a profile\n");
         return SET_ERR;
       }
       cfg->active = (uint8_t)i;
     }
+    wifi_conn_mark_creds_unsaved(); // persist once a join with these works
     return SET_WIFI;
   } else if (strcasecmp(args, "pass") == 0) {
     if (cfg->active >= cfg->profile_count) {
-      out(io, "ERR no active profile -- set ssid first\n");
+      out(io, "ERR no active profile -- set ssid (or join <ssid>) first\n");
       return SET_ERR;
     }
     strncpy(cfg->profiles[cfg->active].password, val, CONFIG_PASS_MAX - 1);
     cfg->profiles[cfg->active].password[CONFIG_PASS_MAX - 1] = '\0';
+    wifi_conn_mark_creds_unsaved(); // persist once a join with these works
     return SET_WIFI;
   } else if (strcasecmp(args, "country") == 0) {
     cfg->country = parse_country(val);
@@ -585,6 +668,11 @@ static void handle_main(const cfg_io_t *io, char *cmd, char *args, config_t *cfg
     config_proto_dump(io, cfg);
   } else if (strcasecmp(cmd, "LIST") == 0) {
     list_profiles(io, cfg);
+  } else if (strcasecmp(cmd, "JOIN") == 0 && args) {
+    // Join a network by name: select-or-create its profile and associate if
+    // the credentials suffice. The portal's scan picker sends this.
+    join_ssid(io, cfg, args, -1);
+    config_proto_dump(io, cfg);
   } else if (strcasecmp(cmd, "USE") == 0 && args) {
     int i = parse_index(args, cfg->profile_count);
     if (i < 0) {
@@ -600,7 +688,12 @@ static void handle_main(const cfg_io_t *io, char *cmd, char *args, config_t *cfg
   } else if (strcasecmp(cmd, "DEL") == 0 && args) {
     int i = parse_index(args, cfg->profile_count);
     if (i < 0) {
-      out(io, "ERR usage: del <n> (see list)\n");
+      // Not a list index: try it as an SSID. The portal deletes by name, so
+      // a concurrent MRU reorder can't make it forget the wrong network.
+      i = config_find_profile(cfg, args);
+    }
+    if (i < 0) {
+      out(io, "ERR usage: del <n|ssid> (see list)\n");
       return;
     }
     config_del_profile(cfg, i);
@@ -680,10 +773,15 @@ static void handle_main(const cfg_io_t *io, char *cmd, char *args, config_t *cfg
   } else if (strcasecmp(cmd, "SCAN") == 0) {
     start_scan(io);
   } else if (strcasecmp(cmd, "SAVE") == 0) {
-    out(io, config_save(cfg) ? "[*] saved to flash\n" : "[!] save failed\n");
+    bool ok = config_save(cfg);
+    if (ok) {
+      wifi_conn_note_saved(); // staged credentials are in flash now
+    }
+    out(io, ok ? "[*] saved to flash\n" : "[!] save failed\n");
     config_proto_dump(io, cfg);
   } else if (strcasecmp(cmd, "RESTORE") == 0) {
     config_load(cfg); // discard unsaved edits: reload the saved (or default) record
+    wifi_conn_note_saved(); // staged credentials were just discarded with the rest
     out(io, "[*] restored saved settings\n");
     if (g_apply) {
       g_apply(cfg);
@@ -695,8 +793,8 @@ static void handle_main(const cfg_io_t *io, char *cmd, char *args, config_t *cfg
   } else {
     out(io, "[!] commands: set <ssid|pass|country|debug|key|peer|psk|endpoint|addr|"
             "hostip|dns|keepalive|mtu|routes|apssid|appass|apaddr|apclient|ap> <val> | "
-            "genkey [force] | pubkey | pcap <on|off|clear> | list | use <n> | "
-            "del <n> | scan | save | restore | reboot | bootsel\n");
+            "genkey [force] | pubkey | pcap <on|off|clear> | list | join <ssid> | "
+            "use <n> | del <n> | scan | save | restore | reboot | bootsel\n");
   }
 }
 
@@ -723,20 +821,8 @@ static void handle_scan(const cfg_io_t *io, char *cmd, char *args, config_t *cfg
       return;
     }
     const wifi_scan_entry_t *e = wifi_scan_get((uint8_t)i);
-    int p = config_find_profile(cfg, e->ssid); // reuse an existing profile if any
-    if (p < 0) {
-      p = config_add_profile(cfg, e->ssid);
-      if (p < 0) {
-        out(io, "ERR profile list full -- back then del one\n");
-        return;
-      }
-    }
-    cfg->active = (uint8_t)p;
     g_mode = MODE_MAIN;
-    out(io, "[*] staged -- set pass <password> then save\n");
-    if (g_apply) {
-      g_apply(cfg); // open networks associate now; secured wait for the password
-    }
+    join_ssid(io, cfg, e->ssid, e->auth == 0);
     config_proto_dump(io, cfg);
   } else {
     out(io, "[!] scan: back | join <n> | scan | live\n");
@@ -752,7 +838,7 @@ void config_proto_handle_line(const cfg_io_t *io, char *line, config_t *cfg) {
   }
   if (n == 0) { // bare Enter reprints the current view
     if (g_mode == MODE_SCAN) {
-      list_scan(io);
+      list_scan(io, cfg);
     } else {
       config_proto_dump(io, cfg);
     }
@@ -788,10 +874,12 @@ void config_proto_poll(const cfg_io_t *io, config_t *cfg) {
   }
 
   // Single scan: union SCAN_PASSES passive passes before showing the list.
-  bool done = wifi_scan_poll(); // also clears a stray latch if scan_rounds == 0
+  // Nothing of ours in flight -> hands off wifi_scan entirely: a wifi_conn
+  // (manager) scan may be running, and polling here would eat its completion.
   if (scan_rounds == 0) {
     return;
   }
+  bool done = wifi_scan_poll();
   if (done && --scan_rounds > 0) {
     out(io, "."); // a pass finished, more to go
   }
@@ -801,7 +889,7 @@ void config_proto_poll(const cfg_io_t *io, config_t *cfg) {
     }
   } else if (g_mode == MODE_SCAN) {
     out(io, "\n");
-    list_scan(io);
+    list_scan(io, cfg);
     out(io, config_proto_prompt());
   }
 }
@@ -814,16 +902,23 @@ const char *config_proto_prompt(void) {
     // Same shape as the main prompt: the verbs in parentheses before the '#'.
     return wifi_scan_in_progress() ? "" : "(back|join|scan|live) # ";
   }
-  return "(set|scan|list|use|save) # ";
+  return "(set|scan|join|list|use|save) # ";
 }
 
 bool config_proto_contscan_active(void) { return g_mode == MODE_CONTSCAN; }
 
+bool config_proto_owns_scan(void) {
+  // Scan passes pending, or any scan-view mode: while a user is looking at
+  // (or collecting) a numbered result list, the connection manager must not
+  // start a scan of its own -- wifi_scan_start resets the results, which
+  // would renumber the list their `join <n>` refers to.
+  return scan_rounds > 0 || g_mode != MODE_MAIN;
+}
+
 void config_proto_contscan_stop(const cfg_io_t *io, config_t *cfg) {
-  (void)cfg;
   wifi_scan_stop();   // abandon the in-flight pass: no further auto-print
   scan_rounds = 0;
   g_mode = MODE_SCAN; // back to the scan submenu with the last results
   out(io, "\n[*] stopped\n");
-  list_scan(io);
+  list_scan(io, cfg);
 }

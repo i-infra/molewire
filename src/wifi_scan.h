@@ -23,6 +23,7 @@ typedef struct {
   int16_t rssi;               // signal strength, dBm (higher is stronger)
   uint16_t channel;
   uint8_t bssid[6];
+  uint8_t auth; // cyw43 auth_mode from the beacon; 0 = open, nonzero = secured
 } wifi_scan_entry_t;
 
 // Start a scan, clearing any previous results (no-op returning true if one is

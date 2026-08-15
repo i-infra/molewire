@@ -286,10 +286,16 @@ uint16_t tud_network_xmit_cb(uint8_t *dst, void *ref, uint16_t arg) {
 static void derive_macs(void) {
   pico_unique_board_id_t id;
   pico_get_unique_board_id(&id);
-  // Locally administered, unicast; body from the flash unique ID.
-  tud_network_mac_address[0] = 0x02;
-  for (int i = 0; i < 5; i++) {
-    tud_network_mac_address[1 + i] =
+  // Globally-administered bit (0x02) deliberately clear: Android's kernel
+  // renames a locally-administered CDC interface to usb0 and leaves it out of
+  // the default routing/connectivity path, while a globally-unique-looking MAC
+  // comes up as eth0 and is picked up automatically. Body from the flash
+  // unique ID, so the address is still per-device.
+  tud_network_mac_address[0] = 0x00;
+  tud_network_mac_address[1] = 0x1A;
+  tud_network_mac_address[2] = 0x11;
+  for (int i = 0; i < 3; i++) {
+    tud_network_mac_address[3 + i] =
         id.id[i] ^ id.id[(i + 5) % PICO_UNIQUE_BOARD_ID_SIZE_BYTES];
   }
   tud_network_mac_address[5] &= 0xFE; // keep the ^0x01 device MAC distinct

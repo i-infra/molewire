@@ -1,13 +1,17 @@
-# Host-side tests for the vendored WireGuard core. No pico-sdk required: the
-# crypto is portable C and wireguard.c's lwIP types are satisfied by the stub
-# headers in fake_lwip/ (it stores but never dereferences them).
+# Host-side tests for the vendored WireGuard core (plus the pure Wi-Fi
+# candidate-ordering logic). No pico-sdk required: the crypto is portable C
+# and wireguard.c's lwIP types are satisfied by the stub headers in fake_lwip/
+# (it stores but never dereferences them). wifi_pick.c depends only on
+# config.h, which is SDK-free.
 
 CC ?= cc
 WG := ../wireguard
+SRC := ../src
 CFLAGS := -O1 -g -Wall -Wextra -Wno-unused-parameter \
-          -I$(WG) -Ifake_lwip
+          -I$(WG) -I$(SRC) -Ifake_lwip
 
 SRCS := test_main.c \
+        $(SRC)/wifi_pick.c \
         $(WG)/wireguard.c \
         $(WG)/crypto.c \
         $(WG)/crypto/refc/blake2s.c \

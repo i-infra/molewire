@@ -22,6 +22,7 @@
 #include "crypto/refc/chacha20.h"
 #include "crypto/refc/chacha20poly1305.h"
 #include "crypto/refc/poly1305-donna.h"
+#include "wifi_pick.h"
 #include "wireguard.h"
 
 // --- tiny framework -----------------------------------------------------------
@@ -456,6 +457,70 @@ static void test_handshake(void) {
         "tampered transport packet rejected");
 }
 
+// --- Wi-Fi candidate ordering (wifi_pick.c) -------------------------------------
+
+static void test_wifi_pick(void) {
+  uint8_t out[CONFIG_PROFILE_MAX];
+  const uint8_t NONE = 0xFF; // CONFIG_ACTIVE_NONE
+
+  // Empty list: no candidates.
+  check(wifi_pick_order(NULL, 0, NONE, 0, out) == 0, "pick: empty list");
+
+  // All unseen: exactly one blind candidate, rotating with rr_unseen.
+  wifi_prof_state_t all_unseen[3] = {
+      {WIFI_RSSI_UNSEEN, WIFI_PROF_UNTRIED},
+      {WIFI_RSSI_UNSEEN, WIFI_PROF_UNTRIED},
+      {WIFI_RSSI_UNSEEN, WIFI_PROF_UNTRIED},
+  };
+  check(wifi_pick_order(all_unseen, 3, NONE, 0, out) == 1 && out[0] == 0,
+        "pick: one unseen per cycle");
+  check(wifi_pick_order(all_unseen, 3, NONE, 1, out) == 1 && out[0] == 1,
+        "pick: unseen slot rotates");
+  check(wifi_pick_order(all_unseen, 3, NONE, 5, out) == 1 && out[0] == 2,
+        "pick: rotation wraps");
+
+  // Seen profiles ordered strongest-first; one unseen appended after.
+  wifi_prof_state_t mixed[4] = {
+      {-70, WIFI_PROF_UNTRIED},
+      {WIFI_RSSI_UNSEEN, WIFI_PROF_UNTRIED},
+      {-50, WIFI_PROF_UNTRIED},
+      {-60, WIFI_PROF_UNTRIED},
+  };
+  uint8_t n = wifi_pick_order(mixed, 4, NONE, 0, out);
+  check(n == 4 && out[0] == 2 && out[1] == 3 && out[2] == 0 && out[3] == 1,
+        "pick: strongest first, unseen last");
+
+  // The active profile wins within the bonus, loses beyond it.
+  wifi_prof_state_t near[2] = {{-55, WIFI_PROF_UNTRIED}, {-60, WIFI_PROF_UNTRIED}};
+  check(wifi_pick_order(near, 2, 1, 0, out) == 2 && out[0] == 1,
+        "pick: active wins a near-tie");
+  wifi_prof_state_t far[2] = {{-45, WIFI_PROF_UNTRIED}, {-60, WIFI_PROF_UNTRIED}};
+  check(wifi_pick_order(far, 2, 1, 0, out) == 2 && out[0] == 0,
+        "pick: much stronger network beats active");
+
+  // Equal scores keep list order (most-recently-used first).
+  wifi_prof_state_t tie[2] = {{-50, WIFI_PROF_UNTRIED}, {-50, WIFI_PROF_UNTRIED}};
+  check(wifi_pick_order(tie, 2, NONE, 0, out) == 2 && out[0] == 0,
+        "pick: ties keep MRU order");
+
+  // BADPASS is excluded outright -- seen or as the blind slot.
+  wifi_prof_state_t bad[3] = {
+      {-40, WIFI_PROF_BADPASS},
+      {WIFI_RSSI_UNSEEN, WIFI_PROF_BADPASS},
+      {WIFI_RSSI_UNSEEN, WIFI_PROF_UNTRIED},
+  };
+  n = wifi_pick_order(bad, 3, NONE, 0, out);
+  check(n == 1 && out[0] == 2, "pick: badpass excluded, blind slot skips it");
+  wifi_prof_state_t allbad[2] = {{-40, WIFI_PROF_BADPASS},
+                                 {WIFI_RSSI_UNSEEN, WIFI_PROF_BADPASS}};
+  check(wifi_pick_order(allbad, 2, NONE, 0, out) == 0, "pick: all badpass -> none");
+
+  // NOJOIN profiles remain ordinary candidates.
+  wifi_prof_state_t nj[2] = {{-50, WIFI_PROF_NOJOIN}, {-60, WIFI_PROF_UNTRIED}};
+  check(wifi_pick_order(nj, 2, NONE, 0, out) == 2 && out[0] == 0,
+        "pick: nojoin still tried");
+}
+
 int main(void) {
   test_anchors();
   test_blake2s();
@@ -464,6 +529,7 @@ int main(void) {
   test_xchacha20poly1305();
   test_base64();
   test_handshake();
+  test_wifi_pick();
 
   printf("\n%d passed, %d failed\n", g_pass, g_fail);
   return g_fail ? 1 : 0;

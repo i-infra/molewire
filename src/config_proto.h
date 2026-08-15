@@ -93,6 +93,11 @@ void config_proto_handle_line(const cfg_io_t *io, char *line, config_t *cfg);
 // and lock-free, so the console can avoid taking the cyw43 lock every tick.
 bool config_proto_scanning(void);
 
+// True while a console session owns the scan machinery: single-scan passes
+// pending, the scan submenu, or the live scan. The Wi-Fi connection manager
+// (wifi_conn) holds off its own scans and joins for the duration.
+bool config_proto_owns_scan(void);
+
 // Drive a pending asynchronous scan: when results arrive, print the numbered
 // list and the scan prompt. Call once per console tick (while
 // config_proto_scanning() is true), under the lwIP lock.

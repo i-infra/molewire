@@ -85,12 +85,25 @@ Plug the dongle in and browse to **http://pico-wg.local** — a configuration
 and status page served by the device itself. (The device also carries a
 WebUSB landing-page descriptor naming that URL; Chromium-family browsers
 *may* prompt "Go to pico-wg.local" at plug-in, but current builds often ship
-that notification disabled, so don't count on it.) Fill in Wi-Fi and
-WireGuard settings, press
-*generate keypair*, give the shown public key to your WireGuard admin, enter
-the address pair and endpoint they hand back, *apply*, *save*. The page also
-shows live status (tunnel state, lease, USB counters) and has a console box
-that accepts every serial-console command.
+that notification disabled, so don't count on it.) Press *scan for networks*
+and pick the upstream Wi-Fi from the list (a password prompt appears only for
+secured networks it doesn't know; typing an SSID is only ever needed for a
+hidden one). Then press *generate keypair*, give the shown public key to your
+WireGuard admin, enter the address pair and endpoint they hand back, *apply*,
+*save*. The page also shows live status (tunnel state, lease, USB counters)
+and has a console box that accepts every serial-console command.
+
+#### Saved networks and auto-join
+
+The dongle remembers the **8 most recently used networks** (least recently
+used is evicted) and needs no reconfiguration to move between them: whenever
+the uplink is down it scans, matches the results against the saved list, and
+joins the strongest known network — preferring the one that last worked,
+skipping any that rejected its password (marked *bad password?* in the UIs
+and retried after 10 minutes), and periodically blind-trying saved networks
+absent from the scan so hidden SSIDs keep working. A network joined once is
+persisted automatically the moment the join succeeds; roaming between
+already-saved networks never writes flash.
 
 Reachability is engineered to survive any config state:
 
@@ -160,9 +173,10 @@ never leaves the device. Give the public key to the WireGuard admin; they hand
 back the address pair and endpoint. To import an identity generated elsewhere
 instead, `set key <private key, base64>`.
 
-`scan` / `join <n>` browse nearby networks; `set psk <key>` adds an optional
-preshared key. Every change applies live. On the server, add the peer with
-AllowedIPs covering both addresses:
+`scan` / `join <n>` browse nearby networks (known ones are marked `[saved]`,
+`[connected]`, `[open]`, or `[saved, bad password?]`), and `join <ssid>` joins
+by name; `set psk <key>` adds an optional preshared key. Every change applies
+live. On the server, add the peer with AllowedIPs covering both addresses:
 
 ```
 [Peer]

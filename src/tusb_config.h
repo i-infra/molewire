@@ -76,9 +76,6 @@ extern "C" {
 #define CFG_TUSB_MEM_ALIGN __attribute__((aligned(4)))
 #endif
 
-// set ECM (RNDIS) or NCM
-#define USE_ECM 0
-
 //--------------------------------------------------------------------
 // NCM CLASS CONFIGURATION, SEE "ncm.h" FOR PERFORMANCE TUNING
 //--------------------------------------------------------------------
@@ -114,10 +111,12 @@ extern "C" {
 
 //------------- CLASS -------------//
 
-// Network class has 2 drivers: ECM/RNDIS and NCM.
-// Only one of the drivers can be enabled
-#define CFG_TUD_ECM_RNDIS USE_ECM
-#define CFG_TUD_NCM (1 - CFG_TUD_ECM_RNDIS)
+// TinyUSB's network class has two mutually exclusive drivers, ECM/RNDIS and
+// NCM. This firmware uses NCM: it is the more efficient framing (multiple
+// datagrams batched per USB transfer) and is driven in-box by Windows 10+
+// (via the MS OS 2.0 WINNCM binding in usb_descriptors.c), macOS, and Linux.
+#define CFG_TUD_ECM_RNDIS 0
+#define CFG_TUD_NCM 1
 
 // Three CDC-ACM serial functions alongside the network class: a management
 // console (instance 0, serial_console.c), a debug-output console (instance 1,

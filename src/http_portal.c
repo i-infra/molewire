@@ -22,6 +22,8 @@
 #include "usb_net.h"
 #include "web_page.h" // generated: web_index_gz[] / WEB_INDEX_GZ_LEN
 #include "wg.h"
+#include "wifi_conn.h" // manager state + per-profile annotations for the JSON
+#include "wifi_scan.h"
 
 #ifndef FW_VERSION
 #define FW_VERSION "0.0.0-dev"
@@ -29,7 +31,7 @@
 
 #define HTTP_CONNS 2
 #define REQ_MAX 1024
-#define RESP_MAX 2304 // headers + JSON status or captured console output
+#define RESP_MAX 4096 // headers + JSON status/scan list or captured console output
 #define IDLE_POLLS 10 // ~10 s at the 1 s poll interval before an idle abort
 
 // CORS + Chromium Local Network Access: lets an https-hosted entry page (the
@@ -145,8 +147,23 @@ static uint16_t status_json(char *o, uint16_t cap) {
        dhcp_server_leased(&dhcp_usb) ? "true" : "false");
   JADD(o, n, cap, "\"wifi\":{\"ssid\":");
   n += (uint16_t)json_str(o + n, cap - n, config_active_ssid(g_cfg)); // bounded by cap
-  JADD(o, n, cap, ",\"link\":%s,\"ip\":\"%s\"},", netif_is_link_up(sta) ? "true" : "false",
-       sta_ip);
+  JADD(o, n, cap, ",\"link\":%s,\"ip\":\"%s\",\"state\":\"%s\",\"profiles\":[",
+       netif_is_link_up(sta) ? "true" : "false", sta_ip,
+       netif_is_link_up(sta) ? "up" : wifi_conn_state_str());
+  for (uint8_t i = 0; i < g_cfg->profile_count; i++) {
+    static const char *stname[] = {"", "connected", "nojoin", "badpass"};
+    int16_t rssi = wifi_conn_prof_rssi(i);
+    JADD(o, n, cap, "%s{\"ssid\":", i ? "," : "");
+    n += (uint16_t)json_str(o + n, cap - n, g_cfg->profiles[i].ssid); // bounded by cap
+    JADD(o, n, cap, ",\"open\":%s,\"active\":%s,\"status\":\"%s\"",
+         g_cfg->profiles[i].password[0] ? "false" : "true",
+         i == g_cfg->active ? "true" : "false", stname[wifi_conn_prof_status(i) & 3]);
+    if (rssi != WIFI_RSSI_UNSEEN) {
+      JADD(o, n, cap, ",\"rssi\":%d", rssi);
+    }
+    JADD(o, n, cap, "}");
+  }
+  JADD(o, n, cap, "]},");
   JADD(o, n, cap, "\"wg\":{\"state\":\"%s\",\"pubkey\":\"%s\",", wg_state_str(),
        have_pub ? pub : "");
   JADD(o, n, cap, "\"peer_set\":%s,\"psk_set\":%s,\"endpoint\":",
@@ -175,6 +192,37 @@ static uint16_t status_json(char *o, uint16_t cap) {
        "\"usb\":{\"from_host\":%lu,\"to_host\":%lu,\"txdrop\":%lu,\"poolfail\":%lu}}",
        (unsigned long)s.from_host, (unsigned long)s.to_host, (unsigned long)s.txdrop,
        (unsigned long)s.poolfail);
+  return n;
+}
+
+// Build the /api/scan JSON body: scan state plus the collected networks,
+// annotated against the saved profiles so the picker can mark known ones.
+static uint16_t scan_json(char *o, uint16_t cap) {
+  struct netif *sta = &cyw43_state.netif[CYW43_ITF_STA];
+  bool link = netif_is_link_up(sta);
+  uint32_t age = wifi_conn_scan_age_ms();
+  uint16_t n = 0;
+  JADD(o, n, cap, "{\"scanning\":%s,\"age_s\":%ld,\"nets\":[",
+       (wifi_conn_scanning() || config_proto_scanning()) ? "true" : "false",
+       age == UINT32_MAX ? -1L : (long)(age / 1000u));
+  for (uint8_t i = 0; i < wifi_scan_count(); i++) {
+    const wifi_scan_entry_t *e = wifi_scan_get(i);
+    int p = config_find_profile(g_cfg, e->ssid);
+    JADD(o, n, cap, "%s{\"ssid\":", i ? "," : "");
+    n += (uint16_t)json_str(o + n, cap - n, e->ssid); // bounded by cap
+    JADD(o, n, cap, ",\"rssi\":%d,\"ch\":%u,\"open\":%s,\"saved\":%s", e->rssi,
+         e->channel, e->auth == 0 ? "true" : "false", p >= 0 ? "true" : "false");
+    if (p >= 0) {
+      if ((uint8_t)p == g_cfg->active && link) {
+        JADD(o, n, cap, ",\"connected\":true");
+      }
+      if (wifi_conn_prof_status((uint8_t)p) == WIFI_PROF_BADPASS) {
+        JADD(o, n, cap, ",\"badpass\":true");
+      }
+    }
+    JADD(o, n, cap, "}");
+  }
+  JADD(o, n, cap, "]}");
   return n;
 }
 
@@ -320,6 +368,17 @@ static void handle_request(conn_t *c) {
   }
   if (is_get && strcmp(path, "/api/status") == 0) {
     uint16_t n = status_json(body_buf, sizeof(body_buf));
+    conn_respond(c, "200 OK", "application/json", NULL, (const uint8_t *)body_buf, n);
+    return;
+  }
+  if (strcmp(path, "/api/scan") == 0 && (is_get || is_post)) {
+    // POST asks the connection manager for a scan (safe while associated);
+    // both verbs return the current scan state + results, so the page just
+    // polls GET until "scanning" goes false.
+    if (is_post) {
+      wifi_conn_request_scan();
+    }
+    uint16_t n = scan_json(body_buf, sizeof(body_buf));
     conn_respond(c, "200 OK", "application/json", NULL, (const uint8_t *)body_buf, n);
     return;
   }

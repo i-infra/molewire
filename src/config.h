@@ -131,12 +131,24 @@ const char *config_active_ssid(const config_t *cfg);
 const char *config_active_pass(const config_t *cfg);
 
 // --- profile list operations --------------------------------------------------
+//
+// The profile array doubles as the recency order: most-recently-used first.
+// config_touch_profile records a use by moving a profile to the front, and a
+// full list evicts from the tail (the least recently used) on add -- so the
+// device always keeps credentials for the 8 networks it used last.
 
 // Index of the profile whose SSID matches, or -1 if none.
 int config_find_profile(const config_t *cfg, const char *ssid);
 
-// Append a profile {ssid, ""} and return its index, or -1 if the list is full.
+// Append a profile {ssid, ""} and return its index. A full list evicts the
+// least-recently-used profile (the last one that isn't `active`) to make room,
+// so this only returns -1 for a degenerate list it cannot evict from.
 int config_add_profile(config_t *cfg, const char *ssid);
+
+// Record a use of profile i (a successful join): move it to the front of the
+// list, fixing up `active`. Returns the profile's new index (0), or -1 if i
+// is out of range.
+int config_touch_profile(config_t *cfg, int i);
 
 // Remove profile i, shifting later entries down and fixing up `active`.
 void config_del_profile(config_t *cfg, int i);

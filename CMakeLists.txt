@@ -34,6 +34,8 @@ add_executable(pico-wg-dongle
     src/config_proto.c
     src/serial_console.c
     src/wifi_scan.c
+    src/wifi_conn.c
+    src/wifi_pick.c
     src/debug_console.c
     src/usb_net.c
     src/dhcp_server.c

@@ -45,6 +45,17 @@ font-size:.75rem;color:var(--dim)}
 #cmdline{font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
 .actions{display:flex;gap:.6rem;margin-top:.8rem;flex-wrap:wrap}
 .offline{opacity:.5}
+.net{display:flex;align-items:center;gap:.6rem;padding:.35rem 0;
+border-top:1px solid var(--line)}
+.net:first-child{border-top:none}
+.net .nm{flex:1;overflow-wrap:anywhere}
+.net .db{color:var(--dim);font-size:.8rem;white-space:nowrap}
+.net input{width:auto;flex:1}
+.badge{font-size:.7rem;border:1px solid var(--line);border-radius:4px;
+padding:0 .3rem;color:var(--dim);white-space:nowrap}
+.badge.ok{color:var(--ok);border-color:var(--ok)}
+.badge.bad{color:var(--bad);border-color:var(--bad)}
+details summary{color:var(--dim);font-size:.8rem;cursor:pointer;margin-top:.6rem}
 </style>
 </head>
 <body>
@@ -77,13 +88,22 @@ endpoint.</p>
 </div>
 
 <div class="card">
-<h2>Wi-Fi</h2>
+<h2>Wi-Fi uplink</h2>
+<div id="proflist"></div>
+<div class="actions"><button id="scanbtn">scan for networks</button></div>
+<div id="scanlist"></div>
+<details><summary>hidden or out-of-range network&hellip;</summary>
 <div class="row">
 <div><label for="f_ssid">SSID</label><input id="f_ssid" autocomplete="off"></div>
-<div><label for="f_pass">Password</label><input id="f_pass" type="password"
-autocomplete="off"></div>
+<div><label for="f_pass">Password (empty = open)</label><input id="f_pass"
+type="password" autocomplete="off"></div>
 </div>
-<div class="actions"><button id="setwifi">apply Wi-Fi</button></div>
+<div class="actions"><button id="setwifi">join</button></div>
+</details>
+<p style="color:var(--dim);font-size:.8rem;margin:.6rem 0 0">
+A network is remembered automatically once joining it succeeds (the 8 most
+recently used are kept), and the dongle connects to whichever saved network
+is in range.</p>
 </div>
 
 <div class="card">
@@ -177,8 +197,9 @@ $("version").textContent=j.version;
 pill($("tunnel"),j.wg.state,
 j.wg.state==="up"?"ok":j.provisioned?"warn":"bad");
 $("wifi").textContent=j.wifi.ssid?
-`${j.wifi.ssid} — ${j.wifi.link?"associated ("+j.wifi.ip+")":"associating…"}`:
-"not configured";
+`${j.wifi.ssid} — ${j.wifi.link?"associated ("+j.wifi.ip+")":j.wifi.state+"…"}`:
+(j.wifi.profiles&&j.wifi.profiles.length?j.wifi.state+"…":"not configured");
+renderProfiles(j.wifi.profiles||[]);
 $("wg").textContent=j.provisioned?
 `${j.wg.state} — ${j.wg.endpoint}:${j.wg.port}, ${j.wg.addr}/${j.wg.prefix}`+
 (j.wg.routes.length?` (split: ${j.wg.routes.join(", ")})`:" (gateway mode)"):
@@ -193,7 +214,6 @@ $("apstate").textContent=j.ap.enabled?
 (j.ap.stas?("associated"+(j.ap.leased?", leased":"")):"none"):
 "off";
 if(!filled){filled=true;
-$("f_ssid").value=j.wifi.ssid||"";
 $("f_ep").value=j.wg.endpoint||"";
 $("f_port").value=j.wg.port||"";
 $("f_addr").value=j.wg.addr?j.wg.addr+"/"+j.wg.prefix:"";
@@ -245,10 +265,87 @@ if(t.includes("already set")&&
 confirm("A key already exists. Replace it? The server must then be updated "+
 "with the new public key."))await cmd("genkey force")};
 
+// --- Wi-Fi picker ---------------------------------------------------------
+
+const esc=s=>s.replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+
+// Join by name: `join` selects-or-creates the profile; a secured new network
+// additionally needs its password, which applies (and later auto-saves) on
+// its own.
+function joinNet(ssid,pass){
+if(pass!==undefined&&pass!=="")cmds(["join "+ssid,"set pass "+pass]);
+else cmd("join "+ssid)}
+
+function profNote(p){
+if(p.status==="connected")return ["connected","ok"];
+if(p.status==="badpass")return ["bad password?","bad"];
+if(p.rssi!==undefined)return [p.rssi+" dBm",""];
+return ["",""]}
+
+function renderProfiles(ps){
+const el=$("proflist");
+el.innerHTML=ps.length?"":'<p style="color:var(--dim);font-size:.85rem;margin:0">'+
+"No saved networks yet — scan and pick one.</p>";
+ps.forEach(p=>{
+const [note,cls]=profNote(p);
+const row=document.createElement("div");row.className="net";
+row.innerHTML=`<span class="nm">${esc(p.ssid)}${p.active?" *":""}</span>`+
+(note?`<span class="badge ${cls}">${esc(note)}</span>`:"")+
+(p.open?'<span class="badge">open</span>':"");
+const join=document.createElement("button");join.textContent="join";
+join.onclick=()=>joinNet(p.ssid);
+const del=document.createElement("button");del.textContent="forget";
+del.onclick=()=>cmd("del "+p.ssid);
+if(p.status!=="connected")row.appendChild(join);
+row.appendChild(del);
+el.appendChild(row)})}
+
+function renderScan(j){
+const el=$("scanlist");el.innerHTML="";
+const nets=(j.nets||[]).slice().sort((a,b)=>b.rssi-a.rssi);
+if(!nets.length&&!j.scanning){
+el.innerHTML='<p style="color:var(--dim);font-size:.85rem">(nothing found)</p>';return}
+nets.forEach(nt=>{
+const row=document.createElement("div");row.className="net";
+row.innerHTML=`<span class="nm">${esc(nt.ssid)}</span>`+
+`<span class="db">${nt.rssi} dBm</span>`+
+(nt.connected?'<span class="badge ok">connected</span>':"")+
+(nt.saved&&!nt.connected?'<span class="badge">saved</span>':"")+
+(nt.badpass?'<span class="badge bad">bad password?</span>':"")+
+(nt.open?'<span class="badge">open</span>':"");
+if(!nt.connected){
+const b=document.createElement("button");b.textContent="join";
+b.onclick=()=>{
+if(nt.saved||nt.open){joinNet(nt.ssid);return}
+// Secured, not saved: swap the row for an inline password prompt.
+row.innerHTML=`<span class="nm">${esc(nt.ssid)}</span>`;
+const pw=document.createElement("input");pw.type="password";
+pw.placeholder="password";row.appendChild(pw);
+const go=document.createElement("button");go.textContent="join";
+go.onclick=()=>joinNet(nt.ssid,pw.value);
+pw.addEventListener("keydown",e=>{if(e.key==="Enter")go.onclick()});
+row.appendChild(go);pw.focus()};
+row.appendChild(b)}
+el.appendChild(row)})}
+
+async function pollScan(){
+try{
+const r=await fetch("/api/scan",{cache:"no-store"});
+const j=await r.json();
+renderScan(j);
+if(j.scanning){setTimeout(pollScan,1000);return}
+}catch(e){}
+$("scanbtn").disabled=false;$("scanbtn").textContent="scan for networks"}
+
+$("scanbtn").onclick=async()=>{
+$("scanbtn").disabled=true;$("scanbtn").textContent="scanning…";
+try{await fetch("/api/scan",{method:"POST"})}catch(e){}
+setTimeout(pollScan,1000)};
+
 $("setwifi").onclick=()=>{
-const s=$("f_ssid").value.trim(),p=$("f_pass").value;
+const s=$("f_ssid").value.trim();
 if(!s){log("(ssid empty)");return}
-cmds(["set ssid "+s, p?"set pass "+p:""])};
+joinNet(s,$("f_pass").value)};
 
 $("apply").onclick=()=>{
 const L=[];

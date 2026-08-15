@@ -195,12 +195,39 @@ int config_find_profile(const config_t *cfg, const char *ssid) {
 
 int config_add_profile(config_t *cfg, const char *ssid) {
   if (cfg->profile_count >= CONFIG_PROFILE_MAX) {
-    return -1;
+    // Evict the least recently used: the list is kept in MRU-first order, so
+    // that is the last entry -- unless it is the active one (mid-edit or
+    // currently connected), in which case evict the one before it.
+    int victim = cfg->profile_count - 1;
+    if (cfg->active == (uint8_t)victim) {
+      victim--;
+    }
+    if (victim < 0) {
+      return -1; // single-slot list whose only entry is active: nothing to evict
+    }
+    config_del_profile(cfg, victim);
   }
   int i = cfg->profile_count++;
   memset(&cfg->profiles[i], 0, sizeof(cfg->profiles[i]));
   strncpy(cfg->profiles[i].ssid, ssid, CONFIG_SSID_MAX - 1);
   return i;
+}
+
+int config_touch_profile(config_t *cfg, int i) {
+  if (i < 0 || i >= cfg->profile_count) {
+    return -1;
+  }
+  if (i > 0) {
+    wifi_profile_t moved = cfg->profiles[i];
+    memmove(&cfg->profiles[1], &cfg->profiles[0], (size_t)i * sizeof(wifi_profile_t));
+    cfg->profiles[0] = moved;
+    if (cfg->active == (uint8_t)i) {
+      cfg->active = 0;
+    } else if (cfg->active != CONFIG_ACTIVE_NONE && cfg->active < (uint8_t)i) {
+      cfg->active++;
+    }
+  }
+  return 0;
 }
 
 void config_del_profile(config_t *cfg, int i) {

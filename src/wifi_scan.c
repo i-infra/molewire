@@ -17,6 +17,7 @@ static void fill_entry(wifi_scan_entry_t *e, const cyw43_ev_scan_result_t *r, ui
   e->rssi = r->rssi;
   e->channel = r->channel;
   memcpy(e->bssid, r->bssid, 6);
+  e->auth = r->auth_mode;
 }
 
 // Scan result callback. Fires in the background cyw43 context; callers serialise
