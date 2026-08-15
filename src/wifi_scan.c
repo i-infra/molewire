@@ -25,8 +25,11 @@ static void fill_entry(wifi_scan_entry_t *e, const cyw43_ev_scan_result_t *r, ui
 // one beacon, or several APs sharing an SSID) collapse to the strongest signal.
 static int scan_cb(void *env, const cyw43_ev_scan_result_t *r) {
   (void)env;
-  if (r == NULL || r->ssid_len == 0) {
-    return 0; // skip the scan-complete marker and hidden networks
+  if (r == NULL || r->ssid_len == 0 || r->ssid[0] == '\0') {
+    // Skip the scan-complete marker and hidden networks -- including the
+    // variant that beacons a nonzero-length SSID of NUL bytes, which would
+    // otherwise show up as an unjoinable empty row.
+    return 0;
   }
   uint8_t len = r->ssid_len > 32 ? 32 : r->ssid_len;
 
