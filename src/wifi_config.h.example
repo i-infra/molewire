@@ -7,7 +7,7 @@
  * credentials are not committed.
  *
  * Leaving the SSID/password blank is fine: the image then comes up unprovisioned
- * and is configured at runtime over the management console (see README.adoc).
+ * and is configured at runtime over the management console (see README.md).
  */
 
 #define WIFI_SSID ""

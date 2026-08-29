@@ -56,6 +56,12 @@ cmake --build build
 # first flash: hold BOOTSEL, plug in, copy build/pico-wg-dongle.uf2 to the drive
 ```
 
+`src/wifi_config.h` (compile-time default Wi-Fi credentials, gitignored) must
+exist; copy `src/wifi_config.h.example` and leave it blank to build an
+unprovisioned image. Prebuilt `.uf2` files: every push to `main` builds them
+as a GitHub Actions artifact, and every `v*` tag publishes them (plus
+`SHA256SUMS`) as a GitHub Release.
+
 ### Reflashing without touching the board
 
 Once this firmware (or the bench) is running, the button is never needed again —
@@ -145,6 +151,14 @@ client under Mullvad; the quarantine AP's client can't be covered by the same
 `/32` (point `apclient` at the assigned address *instead of* `hostip` if the
 AP client is the one you want tunnelled). Accounts hold at most 5 devices;
 the script offers to revoke one interactively when the limit is hit.
+
+### tailguard, scripted
+
+`tools/provision-tailguard.py` does the same against a self-hosted
+WireGuard→tailnet bridge: it allocates the next free `/30` from the bridge's
+`wg0.conf` over ssh, registers the dongle's public key as a peer (hot-added
+with `wg set`, so existing tunnels don't blip), and configures the dongle in
+split mode. It is written for one specific deployment; treat it as a template.
 
 ### The serial console
 
@@ -321,20 +335,28 @@ ever matters: the second core is idle.
   routed datapath replaces its transparent L2 bridge.
 - WireGuard implementation: [wireguard-lwip](https://github.com/smartalock/wireguard-lwip)
   (BSD-3-Clause), vendored in `wireguard/` with four local patches:
-  `wireguardif_shutdown`, an include-order fix, checksum regeneration before
-  encryption (lwIP 2.2's `ip4_forward` zeroes forwarded checksums expecting a
-  hardware NIC to refill them), and dual-stack (`LWIP_IPV6`) type fixes.
+  `wireguardif_shutdown`, an include-order fix, restoring zeroed L4 checksums
+  before encryption (`CHECKSUM_GEN_TCP/UDP/ICMP` are off in `lwipopts.h` so
+  lwIP 2.2's `ip4_forward` leaves transit checksums alone — it would otherwise
+  zero them expecting a hardware NIC to refill; locally originated packets
+  then leave the stack with checksum 0 and each egress link repairs them),
+  and dual-stack (`LWIP_IPV6`) type fixes.
 - pico-sdk: BSD-3-Clause.
 
 This project: MIT.
 
 ## Development
 
-- `make -C tests test` — 58 host-side tests: RFC-vector-anchored crypto
+- `make -C tests test` — 69 host-side tests: RFC-vector-anchored crypto
   primitives (independent ChaCha20 reference, BLAKE2s, Poly1305, X25519),
-  AEAD cross-verification, base64, and a full two-device in-memory handshake.
-  `tests/fake_lwip/` stubs make `wireguard.c` compile on the host.
+  AEAD cross-verification, base64, the Wi-Fi candidate-ordering logic, and a
+  full two-device in-memory handshake. `tests/fake_lwip/` stubs make
+  `wireguard.c` compile on the host. CI (`.github/workflows/build.yml`) runs
+  these and the firmware build on every push.
 - `build/pico-wg-bench.uf2` — on-device crypto/throughput bench (separate
   firmware; prints over USB serial and UART).
 - The portal page is `web/index.html`, gzipped into the firmware at build
   time by `tools/gen_web_page.py`.
+- `site/index.html` is the static https entry page the WebUSB landing
+  descriptor points at (host it anywhere static, e.g. GitHub Pages); it just
+  navigates to the on-device portal.

@@ -2,3 +2,10 @@ build/
 src/wifi_config.h
 .DS_Store
 .cache/
+# secrets / local provisioning inputs
+*.key
+mullvad.key
+# host test binaries
+tests/test_main
+tests/*.dSYM/
+__pycache__/

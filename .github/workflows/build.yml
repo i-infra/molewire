@@ -1,0 +1,81 @@
+name: build
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+env:
+  PICO_SDK_VERSION: 2.2.0
+
+jobs:
+  host-tests:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run host-side tests
+        run: make -C tests test
+
+  firmware:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write   # release uploads on tag pushes
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # git describe --tags feeds FW_VERSION
+
+      - name: Install toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            cmake ninja-build gcc-arm-none-eabi libnewlib-arm-none-eabi \
+            libstdc++-arm-none-eabi-newlib build-essential python3
+
+      - name: Cache pico-sdk
+        id: sdk-cache
+        uses: actions/cache@v4
+        with:
+          path: pico-sdk
+          key: pico-sdk-${{ env.PICO_SDK_VERSION }}-submodules
+
+      - name: Fetch pico-sdk
+        if: steps.sdk-cache.outputs.cache-hit != 'true'
+        run: |
+          git clone --depth 1 --branch "$PICO_SDK_VERSION" \
+            https://github.com/raspberrypi/pico-sdk.git pico-sdk
+          git -C pico-sdk submodule update --init --depth 1 \
+            lib/cyw43-driver lib/lwip lib/tinyusb lib/mbedtls
+
+      - name: Configure
+        run: |
+          cp src/wifi_config.h.example src/wifi_config.h
+          cmake -S . -B build -G Ninja \
+            -DPICO_SDK_PATH="$PWD/pico-sdk" -DPICO_BOARD=pico2_w
+
+      - name: Build
+        run: cmake --build build
+
+      - name: Collect artifacts
+        run: |
+          mkdir -p out
+          cp build/pico-wg-dongle.uf2 build/pico-wg-dongle.elf \
+             build/pico-wg-bench.uf2  build/pico-wg-bench.elf out/
+          (cd out && sha256sum * > SHA256SUMS)
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pico-wg-dongle-${{ github.sha }}
+          path: out/*
+
+      - name: Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            out/pico-wg-dongle.uf2
+            out/pico-wg-bench.uf2
+            out/SHA256SUMS
+          generate_release_notes: true
