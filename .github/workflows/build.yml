@@ -61,13 +61,13 @@ jobs:
       - name: Collect artifacts
         run: |
           mkdir -p out
-          cp build/pico-wg-dongle.uf2 build/pico-wg-dongle.elf \
-             build/pico-wg-bench.uf2  build/pico-wg-bench.elf out/
+          cp build/molewire.uf2 build/molewire.elf \
+             build/molewire-bench.uf2  build/molewire-bench.elf out/
           (cd out && sha256sum * > SHA256SUMS)
 
       - uses: actions/upload-artifact@v4
         with:
-          name: pico-wg-dongle-${{ github.sha }}
+          name: molewire-${{ github.sha }}
           path: out/*
 
       - name: Release
@@ -75,7 +75,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            out/pico-wg-dongle.uf2
-            out/pico-wg-bench.uf2
+            out/molewire.uf2
+            out/molewire-bench.uf2
             out/SHA256SUMS
           generate_release_notes: true

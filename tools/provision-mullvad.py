@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Provision a freshly-flashed pico-wg-dongle against Mullvad.
+"""Provision a freshly-flashed molewire against Mullvad.
 
 Reads a Mullvad account number from a file (first argument) or stdin, has the
 dongle generate its WireGuard identity on-device (the private key never exists
@@ -51,7 +51,7 @@ MULLVAD_DNS = "10.64.0.1"  # the in-tunnel resolver every Mullvad WG server offe
 WG_PORT = 51820
 CONSOLE_BAUD = termios.B115200  # NOT 1200: a 1200-baud open reboots to bootloader
 BANNER = "WireGuard USB dongle configuration console"
-DUMP_HEADER = "-- pico-wg-dongle"
+DUMP_HEADER = "-- molewire"
 B64_KEY_RE = re.compile(r"^[A-Za-z0-9+/]{43}=$")
 
 
@@ -153,7 +153,7 @@ def find_console(explicit_port):
             print(f"[*] dongle console: {port}")
             return con
         con.close()
-    die("no pico-wg-dongle management console found among: " + ", ".join(candidates)
+    die("no molewire management console found among: " + ", ".join(candidates)
         + (" (is that the right port?)" if explicit_port else ""))
 
 
@@ -442,7 +442,7 @@ def main():
     print(f"\n[*] tunnel state: {state}")
     if state != "up":
         print("    not up yet -- check the Wi-Fi credentials, that the account has "
-              "time left, and give it a minute; status: http://pico-wg.local")
+              "time left, and give it a minute; status: http://molewire.local")
     else:
         print("    done: the USB host now egresses via " + relay["hostname"] +
               ". Check https://am.i.mullvad.net/connected from the host.")

@@ -1,4 +1,4 @@
-# pico-wg-dongle
+# molewire
 
 A USB WireGuard adapter for the Raspberry Pi Pico 2 W (RP2350).
 
@@ -53,7 +53,7 @@ with the `cyw43-driver`, `lwip`, `tinyusb`, and `mbedtls` submodules.
 ```sh
 PICO_SDK_PATH=/path/to/pico-sdk cmake -S . -B build -G Ninja -DPICO_BOARD=pico2_w
 cmake --build build
-# first flash: hold BOOTSEL, plug in, copy build/pico-wg-dongle.uf2 to the drive
+# first flash: hold BOOTSEL, plug in, copy build/molewire.uf2 to the drive
 ```
 
 `src/wifi_config.h` (compile-time default Wi-Fi credentials, gitignored) must
@@ -78,7 +78,7 @@ A typical development loop is then:
 ```sh
 cmake --build build \
   && stty -f /dev/cu.usbmodem* 1200 ; sleep 2 \
-  && cp build/pico-wg-dongle.uf2 /Volumes/RP2350/
+  && cp build/molewire.uf2 /Volumes/RP2350/
 ```
 
 The bench firmware honors the 1200-baud reset too (via pico_stdio_usb).
@@ -87,10 +87,10 @@ The bench firmware honors the 1200-baud reset too (via pico_stdio_usb).
 
 ### The portal (the easy way)
 
-Plug the dongle in and browse to **http://pico-wg.local** — a configuration
+Plug the dongle in and browse to **http://molewire.local** — a configuration
 and status page served by the device itself. (The device also carries a
 WebUSB landing-page descriptor naming that URL; Chromium-family browsers
-*may* prompt "Go to pico-wg.local" at plug-in, but current builds often ship
+*may* prompt "Go to molewire.local" at plug-in, but current builds often ship
 that notification disabled, so don't count on it.) Press *scan for networks*
 and pick the upstream Wi-Fi from the list (a password prompt appears only for
 secured networks it doesn't know; typing an SSID is only ever needed for a
@@ -114,13 +114,13 @@ already-saved networks never writes flash.
 Reachability is engineered to survive any config state:
 
 - The USB link always carries an IPv6 **link-local** address (the portal's
-  permanent home), and an mDNS responder answers `pico-wg.local` (A + AAAA) on
+  permanent home), and an mDNS responder answers `molewire.local` (A + AAAA) on
   the USB link only — no host DNS or routing configuration is touched, ever.
 - Unprovisioned, the device additionally leases the host `172.31.255.2/30`
   with **no router, no routes, no DNS** (a bring-up island): the portal is
   also at `http://172.31.255.1/` and the host's own connectivity is
   unaffected. Once provisioned, the island is replaced by the tunnel
-  addressing; `pico-wg.local` follows automatically, and the device replugs
+  addressing; `molewire.local` follows automatically, and the device replugs
   itself (a brief USB bounce) so the host re-DHCPs onto the new subnet
   without any manual step.
 - The portal is refused to connections arriving from anywhere but the USB
@@ -322,7 +322,7 @@ USB Full Speed caps the wire at 12 Mbit/s and is the bottleneck by a wide
 margin. Measured end to end (Mac → dongle → WireGuard → Tailscale-bridged
 server → tailnet): **4.65 Mbit/s** of TCP payload ≈ 98% of the no-crypto L2
 bridge baseline — the crypto is effectively free at USB FS rates. On-device
-bench (`pico-wg-bench.uf2`): ChaCha20-Poly1305 37.3 Mbit/s at 1420 B (~32
+bench (`molewire-bench.uf2`): ChaCha20-Poly1305 37.3 Mbit/s at 1420 B (~32
 cycles/byte), X25519 14.2 ms/op (reference C), rekey stall ~56 ms every ~2
 minutes. The Cortex-M0 assembly X25519 in `wireguard/crypto/cortex/` measured
 65% *slower* than the C on the M33 — don't use it. Remaining headroom if it
@@ -353,7 +353,7 @@ This project: MIT.
   full two-device in-memory handshake. `tests/fake_lwip/` stubs make
   `wireguard.c` compile on the host. CI (`.github/workflows/build.yml`) runs
   these and the firmware build on every push.
-- `build/pico-wg-bench.uf2` — on-device crypto/throughput bench (separate
+- `build/molewire-bench.uf2` — on-device crypto/throughput bench (separate
   firmware; prints over USB serial and UART).
 - The portal page is `web/index.html`, gzipped into the firmware at build
   time by `tools/gen_web_page.py`.

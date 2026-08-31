@@ -80,7 +80,7 @@ static bool wireguardif_can_send_initiation(struct wireguard_peer *peer) {
 	return ((peer->last_initiation_tx == 0) || (wireguard_expired(peer->last_initiation_tx, REKEY_TIMEOUT)));
 }
 
-// Local addition (pico-wg-dongle): recompute the IPv4 header and L4 checksums
+// Local addition (molewire): recompute the IPv4 header and L4 checksums
 // of a contiguous IP packet in place. Needed because lwIP 2.2's ip4_forward
 // zeroes them on every forwarded packet (see the call site below). Fields are
 // recomputed only when zero, so valid checksums pass through untouched.
@@ -219,7 +219,7 @@ static err_t wireguardif_output_to_peer(struct netif *netif, struct pbuf *q, con
 					// Copy pbuf to memory - handles case where pbuf is chained
 					pbuf_copy_partial(q, dst, unpadded_len, 0);
 
-					// Local addition (pico-wg-dongle): packets built by the
+					// Local addition (molewire): packets built by the
 					// local stack carry zero L4 checksums (CHECKSUM_GEN_TCP/
 					// UDP/ICMP are 0 in lwipopts.h so ip4_forward stops
 					// zeroing TRANSIT packets' checksums -- fatal once
@@ -1068,7 +1068,7 @@ void wireguardif_peer_init(struct wireguardif_peer *peer) {
 	peer->preshared_key = NULL;
 }
 
-// Local addition (pico-wg-dongle): undo wireguardif_init so the interface can
+// Local addition (molewire): undo wireguardif_init so the interface can
 // be re-created after a runtime config change. Must live in this file because
 // wireguardif_tmr is static.
 void wireguardif_shutdown(struct netif *netif) {

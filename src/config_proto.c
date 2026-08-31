@@ -148,7 +148,7 @@ void config_proto_dump(const cfg_io_t *io, const config_t *cfg) {
   bool assoc = netif_is_link_up(&cyw43_state.netif[CYW43_ITF_STA]);
   char line[80], cc[8], ssid[CONFIG_SSID_MAX];
 
-  out(io, "\n-- pico-wg-dongle " FW_VERSION " --\n");
+  out(io, "\n-- molewire " FW_VERSION " --\n");
   if (cfg->active < cfg->profile_count) {
     snprintf(line, sizeof(line), "    profiles:   %u saved (active: %u)\n",
              cfg->profile_count, (unsigned)(cfg->active + 1));

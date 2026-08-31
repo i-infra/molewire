@@ -101,7 +101,7 @@ static void console_io_write(void *ctx, const char *s) {
 // on any control-line activity, or before the first echoed byte as fallback.
 static void console_banner(void) {
   static const char banner[] =
-      "\r\npico-wg-dongle " FW_VERSION " -- WireGuard USB dongle configuration console\r\n"
+      "\r\nmolewire " FW_VERSION " -- WireGuard USB dongle configuration console\r\n"
       "params: ssid pass country debug key peer psk endpoint addr hostip dns "
       "keepalive mtu routes apssid appass apaddr apclient ap (set <param> <val>); "
       "genkey pubkey pcap list join use del scan save restore reboot bootsel; "

@@ -342,13 +342,13 @@ bool tud_vendor_control_xfer_cb(uint8_t rhport, uint8_t stage, tusb_control_requ
 static char const *string_desc_arr[] = {
   [STRID_LANGID] = (const char[]){0x09, 0x04}, // supported language is English (0x0409)
   [STRID_MANUFACTURER] = "TinyUSB", // Manufacturer
-  [STRID_PRODUCT] = "pico-wg-dongle", // Product
+  [STRID_PRODUCT] = "molewire", // Product
   [STRID_SERIAL] = NULL, // Serials will use unique ID if possible
   [STRID_INTERFACE] = "TinyUSB Network Interface", // Interface Description
-  [STRID_CDC] = "pico-wg-dongle console", // CDC-ACM management console
-  [STRID_CDC2] = "pico-wg-dongle debug", // CDC-ACM debug console
-  [STRID_CDC3] = "pico-wg-dongle bridge", // CDC-ACM serial<->TCP bridge
-  [STRID_VENDOR] = "pico-wg-dongle WebUSB" // vendor (WebUSB) interface
+  [STRID_CDC] = "molewire console", // CDC-ACM management console
+  [STRID_CDC2] = "molewire debug", // CDC-ACM debug console
+  [STRID_CDC3] = "molewire bridge", // CDC-ACM serial<->TCP bridge
+  [STRID_VENDOR] = "molewire WebUSB" // vendor (WebUSB) interface
 
   // STRID_MAC index is handled separately
 };

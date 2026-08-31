@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>pico-wg-dongle</title>
+<title>molewire</title>
 <style>
 :root{--bg:#0d1117;--card:#161b22;--line:#30363d;--fg:#e6edf3;--dim:#8b949e;
 --ok:#3fb950;--warn:#d29922;--bad:#f85149;--acc:#58a6ff;font-size:15px}
@@ -60,7 +60,7 @@ details summary{color:var(--dim);font-size:.8rem;cursor:pointer;margin-top:.6rem
 </head>
 <body>
 <main>
-<h1>pico-wg-dongle <span id="tunnel" class="pill">…</span>
+<h1>molewire <span id="tunnel" class="pill">…</span>
 <small id="version"></small></h1>
 
 <div class="card" id="statuscard">
@@ -229,7 +229,7 @@ $("f_apclient").value=j.ap.client||"";}
 if(!offlineSince)offlineSince=Date.now();
 document.body.classList.add("offline");
 // Re-addressing after provisioning drops v4 connections; the page itself
-// keeps working over pico-wg.local / v6. Just keep polling.
+// keeps working over molewire.local / v6. Just keep polling.
 }
 }
 

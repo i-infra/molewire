@@ -59,7 +59,7 @@ void debug_printf(const char *fmt, ...) {
 // is sent without waiting for DTR): a port-probing tool that opens this
 // otherwise-silent, input-discarding port would get nothing at all back.
 static void debug_banner(void) {
-  static const char banner[] = "\r\npico-wg-dongle " FW_VERSION
+  static const char banner[] = "\r\nmolewire " FW_VERSION
                                " -- debug console (read-only diagnostics stream; "
                                "configuration is on the other CDC port)\r\n";
   put(banner, sizeof(banner) - 1);

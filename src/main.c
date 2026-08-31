@@ -1,4 +1,4 @@
-// pico-wg-dongle: a USB WireGuard adapter.
+// molewire: a USB WireGuard adapter.
 //
 // The Pico 2 W joins an upstream Wi-Fi network as a station, runs a WireGuard
 // tunnel on-device, and presents a CDC-NCM network interface to the USB host.
@@ -48,8 +48,8 @@
 #define BRINGUP_HOST_ADDR PP_HTONL(0xAC1FFF02u) // 172.31.255.2
 #define BRINGUP_PREFIX 30
 
-// The mDNS hostname: the portal is http://pico-wg.local in every device state.
-#define MDNS_HOSTNAME "pico-wg"
+// The mDNS hostname: the portal is http://molewire.local in every device state.
+#define MDNS_HOSTNAME "molewire"
 
 // Watchdog timeout. If the main loop stops feeding the watchdog for this long,
 // the chip resets and USB re-enumerates instead of needing a physical replug.
@@ -103,7 +103,7 @@ void __attribute__((naked, used)) isr_hardfault(void) {
 // restart the DHCP server, and re-create the tunnel. An incomplete WireGuard
 // config gets the bring-up island instead, so the portal is reachable at a
 // known v4 address out of the box. Either way the v6 link-local address (and
-// with it http://pico-wg.local) is untouched -- the portal never moves.
+// with it http://molewire.local) is untouched -- the portal never moves.
 static void apply_wg(const config_t *cfg) {
   if (config_wg_complete(cfg)) {
     usb_net_set_addr(cfg->wg.addr, cfg->wg.prefix);
@@ -216,12 +216,12 @@ int main(void) {
     return -1;
   }
 
-  // pico-wg.local -> the portal, in every provisioning state, plus a
+  // molewire.local -> the portal, in every provisioning state, plus a
   // _http._tcp service record so it shows up in Bonjour browsing.
   cyw43_arch_lwip_begin();
   mdns_resp_init();
   mdns_resp_add_netif(usb_net_netif(), MDNS_HOSTNAME);
-  mdns_resp_add_service(usb_net_netif(), "pico-wg portal", "_http", DNSSD_PROTO_TCP, 80,
+  mdns_resp_add_service(usb_net_netif(), "molewire portal", "_http", DNSSD_PROTO_TCP, 80,
                         NULL, NULL);
   cyw43_arch_lwip_end();
 

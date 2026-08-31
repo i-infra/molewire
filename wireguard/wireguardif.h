@@ -34,7 +34,7 @@
 #ifndef _WIREGUARDIF_H_
 #define _WIREGUARDIF_H_
 
-// Local addition (pico-wg-dongle): opt.h must precede arch.h so arch/cc.h sees
+// Local addition (molewire): opt.h must precede arch.h so arch/cc.h sees
 // NO_SYS from lwipopts.h (its sys_prot_t typedef is guarded by it).
 #include "lwip/opt.h"
 #include "lwip/arch.h"
@@ -131,7 +131,7 @@ err_t wireguardif_disconnect(struct netif *netif, u8_t peer_index);
 // Is the given peer "up"? A peer is up if it has a valid session key it can communicate with
 err_t wireguardif_peer_is_up(struct netif *netif, u8_t peer_index, ip_addr_t *current_ip, u16_t *current_port);
 
-// Local addition (pico-wg-dongle): undo wireguardif_init (stop the timer, close
+// Local addition (molewire): undo wireguardif_init (stop the timer, close
 // the UDP PCB, free the device) so the interface can be re-created after a
 // runtime config change. Call under the lwIP lock, then netif_remove().
 void wireguardif_shutdown(struct netif *netif);

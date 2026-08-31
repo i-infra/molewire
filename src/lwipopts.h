@@ -62,7 +62,7 @@
 #define LWIP_DHCP 1 // client on the Wi-Fi station netif
 #define LWIP_IGMP 1 // mDNS joins 224.0.0.251 on the USB netif
 
-// mDNS responder on the USB netif only: pico-wg.local resolves to the portal
+// mDNS responder on the USB netif only: molewire.local resolves to the portal
 // (A + AAAA) with zero host-side configuration -- .local queries are multicast
 // on-link by the host resolver, never touching its DNS servers or routes.
 #define LWIP_MDNS_RESPONDER 1

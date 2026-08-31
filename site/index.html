@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>pico-wg-dongle</title>
+<title>molewire</title>
 <!--
   The https entry page the dongle's WebUSB landing descriptor points at.
   Host anywhere static + https (GitHub Pages works). Its jobs:
@@ -33,10 +33,10 @@ code{font-family:ui-monospace,Menlo,monospace;font-size:.85em}
 </head>
 <body>
 <main>
-<h1>pico-wg-dongle</h1>
+<h1>molewire</h1>
 <p>Your USB WireGuard dongle serves its configuration portal on the USB link
 itself — nothing here leaves your machine.</p>
-<a class="go" href="http://pico-wg.local/">Open the portal</a>
+<a class="go" href="http://molewire.local/">Open the portal</a>
 <p><a class="alt" href="http://172.31.255.1/">unprovisioned fallback
 (172.31.255.1)</a></p>
 <div id="live"></div>
@@ -52,7 +52,7 @@ serial console on the first CDC port speaks the same protocol
 // the user's permission via a browser prompt.
 (async () => {
   try {
-    const r = await fetch("http://pico-wg.local/api/status",
+    const r = await fetch("http://molewire.local/api/status",
                           {targetAddressSpace: "private", cache: "no-store"});
     const j = await r.json();
     const el = document.getElementById("live");

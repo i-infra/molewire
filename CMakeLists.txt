@@ -1,4 +1,4 @@
-# pico-wg-dongle: USB WireGuard adapter for the Raspberry Pi Pico 2 W.
+# molewire: USB WireGuard adapter for the Raspberry Pi Pico 2 W.
 
 cmake_minimum_required(VERSION 3.13)
 
@@ -24,11 +24,11 @@ set(PICO_BOARD pico2_w CACHE STRING "Board type")
 
 include(pico_sdk_import.cmake)
 
-project(pico-wg-dongle C CXX ASM)
+project(molewire C CXX ASM)
 
 pico_sdk_init()
 
-add_executable(pico-wg-dongle
+add_executable(molewire
     src/main.c
     src/config.c
     src/config_proto.c
@@ -70,7 +70,7 @@ if(NOT FW_VERSION)
   set(FW_VERSION "0.0.0-dev")
 endif()
 message(STATUS "Firmware version: ${FW_VERSION}")
-target_compile_definitions(pico-wg-dongle PRIVATE FW_VERSION="${FW_VERSION}")
+target_compile_definitions(molewire PRIVATE FW_VERSION="${FW_VERSION}")
 
 # The config portal page, gzipped into a generated header.
 find_package(Python3 REQUIRED COMPONENTS Interpreter)
@@ -85,19 +85,19 @@ add_custom_command(
     COMMENT "Gzipping portal page"
 )
 add_custom_target(web_page DEPENDS ${WEB_PAGE_H})
-add_dependencies(pico-wg-dongle web_page)
+add_dependencies(molewire web_page)
 
-pico_set_program_name(pico-wg-dongle "pico-wg-dongle")
-pico_set_program_version(pico-wg-dongle "${FW_VERSION}")
+pico_set_program_name(molewire "molewire")
+pico_set_program_version(molewire "${FW_VERSION}")
 
-pico_enable_stdio_uart(pico-wg-dongle 1)
-pico_enable_stdio_usb(pico-wg-dongle 0)
+pico_enable_stdio_uart(molewire 1)
+pico_enable_stdio_usb(molewire 0)
 
-target_link_libraries(pico-wg-dongle
+target_link_libraries(molewire
     pico_stdlib
     tinyusb_device
     pico_cyw43_arch_lwip_threadsafe_background   # Wi-Fi serviced in background IRQ so USB (tud_task) never starves
-    pico_lwip_mdns      # mDNS responder: pico-wg.local on the USB link
+    pico_lwip_mdns      # mDNS responder: molewire.local on the USB link
     pico_unique_id
     pico_rand           # TRNG-backed randomness for WireGuard session keys
     pico_flash          # flash_safe_execute() for config + boot counter
@@ -105,18 +105,18 @@ target_link_libraries(pico-wg-dongle
     hardware_watchdog
 )
 
-target_include_directories(pico-wg-dongle PRIVATE
+target_include_directories(molewire PRIVATE
     ${CMAKE_CURRENT_LIST_DIR}/src       # project headers, tusb_config.h, lwipopts.h, lwip_hooks.h
     ${CMAKE_CURRENT_LIST_DIR}/wireguard # wireguardif.h, wireguard.h, crypto
     ${CMAKE_CURRENT_BINARY_DIR}/generated # web_page.h (gzipped portal page)
 )
 
-pico_add_extra_outputs(pico-wg-dongle)
+pico_add_extra_outputs(molewire)
 
 # --- crypto profiling bench (separate firmware; see bench/bench_main.c) ----------
 # Deliberately does NOT use src/ (its tusb_config.h would fight pico_stdio_usb's
 # own USB-CDC configuration). Output on both USB serial and UART.
-add_executable(pico-wg-bench
+add_executable(molewire-bench
     bench/bench_main.c
     wireguard/crypto.c
     wireguard/crypto/refc/blake2s.c
@@ -130,8 +130,8 @@ add_executable(pico-wg-bench
     wireguard/crypto/cortex/cortex_m0_mpy121666.s
     wireguard/crypto/cortex/cortex_m0_reduce25519.s
 )
-pico_enable_stdio_uart(pico-wg-bench 1)
-pico_enable_stdio_usb(pico-wg-bench 1)
-target_link_libraries(pico-wg-bench pico_stdlib pico_rand)
-target_include_directories(pico-wg-bench PRIVATE ${CMAKE_CURRENT_LIST_DIR}/wireguard)
-pico_add_extra_outputs(pico-wg-bench)
+pico_enable_stdio_uart(molewire-bench 1)
+pico_enable_stdio_usb(molewire-bench 1)
+target_link_libraries(molewire-bench pico_stdlib pico_rand)
+target_include_directories(molewire-bench PRIVATE ${CMAKE_CURRENT_LIST_DIR}/wireguard)
+pico_add_extra_outputs(molewire-bench)

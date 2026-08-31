@@ -99,7 +99,7 @@ int main(void) {
 
   while (true) {
     uint32_t sys_khz = clock_get_hz(clk_sys) / 1000;
-    printf("\n=== pico-wg-dongle crypto bench (sys clk %lu.%03lu MHz) ===\n",
+    printf("\n=== molewire crypto bench (sys clk %lu.%03lu MHz) ===\n",
            (unsigned long)(sys_khz / 1000), (unsigned long)(sys_khz % 1000));
 
     // Data path: AEAD at tunnel MTU and at ack-sized packets.

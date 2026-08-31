@@ -351,7 +351,7 @@ static void handle_request(conn_t *c) {
     int h = snprintf(c->resp, sizeof(c->resp),
                      "HTTP/1.1 200 OK\r\nContent-Type: application/vnd.tcpdump.pcap\r\n"
                      "Content-Length: %lu\r\nCache-Control: no-store\r\n" PORTAL_CORS_HEADERS
-                     "Content-Disposition: attachment; filename=\"pico-wg.pcap\"\r\n"
+                     "Content-Disposition: attachment; filename=\"molewire.pcap\"\r\n"
                      "Connection: close\r\n\r\n",
                      (unsigned long)body);
     pcap_global_header((uint8_t *)c->resp + h);
