@@ -5,6 +5,9 @@
   </picture>
 </p>
 
+<p align="center"><em>It looks like a flash drive. The computer thinks it's a network cable.<br>
+The computer can't see the Wi-Fi network, and the network sees nothing but encrypted traffic.</em></p>
+
 A USB WireGuard adapter for the Raspberry Pi Pico 2 W (RP2350). Plug it into
 any computer and it shows up as a standard USB network interface (CDC-NCM —
 in-box drivers on Linux, macOS, Windows 10/11). The Pico joins an upstream
@@ -23,6 +26,16 @@ forwarding).
    — it opens the dongle's config portal: pick your Wi-Fi, *generate
    keypair*, give the public key to your WireGuard admin, enter the address
    pair + endpoint they hand back, *apply*, *save*.
+
+## Why
+
+The usual way to protect a connection is to configure the computer: install a
+VPN client, sign in, hope nothing leaks around it. Molewire inverts that: the
+tunnel lives in an $8 USB device and the computer just sees an ordinary
+network cable. This means it works on machines you can't configure
+(locked-down, legacy, not yours) and machines you shouldn't trust (borrowed,
+sketchy, IoT). Instead of walking someone through VPN setup over the phone,
+you set the plug up once and mail it to them.
 
 ## How it works
 
