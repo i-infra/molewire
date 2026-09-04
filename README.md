@@ -75,7 +75,9 @@ cmake --build build && stty -f /dev/cu.usbmodem* 1200 ; sleep 2 && cp build/mole
 **Portal:** http://molewire.local — served by the device itself, reachable in
 every config state (IPv6 link-local + mDNS on the USB link only; before
 provisioning it also leases the host a routeless 172.31.255.2/30 island, so
-your connectivity is untouched). Live status, scan-and-join, key generation,
+your connectivity is untouched — and the portal is reachable at
+**http://172.31.255.1/** even where mDNS is broken; once provisioned, the
+dongle's tunnel-side USB address serves the same role). Live status, scan-and-join, key generation,
 and a console box. The device also carries a WebUSB landing descriptor
 pointing at https://i-infra.github.io/molewire/. The dongle remembers the 8
 most recently used Wi-Fi networks and auto-joins the strongest known one
