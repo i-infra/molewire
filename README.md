@@ -157,14 +157,6 @@ client under Mullvad; the quarantine AP's client can't be covered by the same
 AP client is the one you want tunnelled). Accounts hold at most 5 devices;
 the script offers to revoke one interactively when the limit is hit.
 
-### tailguard, scripted
-
-`tools/provision-tailguard.py` does the same against a self-hosted
-WireGuard→tailnet bridge: it allocates the next free `/30` from the bridge's
-`wg0.conf` over ssh, registers the dongle's public key as a peer (hot-added
-with `wg set`, so existing tunnels don't blip), and configures the dongle in
-split mode. It is written for one specific deployment; treat it as a template.
-
 ### The serial console
 
 The device enumerates the network interface, three CDC-ACM serial ports — the
