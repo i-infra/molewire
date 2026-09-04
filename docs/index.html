@@ -34,8 +34,11 @@ code{font-family:ui-monospace,Menlo,monospace;font-size:.85em}
 <body>
 <main>
 <h1>molewire</h1>
+<p><em>It looks like a flash drive. The computer thinks it's a network cable.
+The computer can't see the Wi-Fi network, and the network sees nothing but
+encrypted traffic.</em></p>
 <p>Your USB WireGuard dongle serves its configuration portal on the USB link
-itself — nothing here leaves your machine.</p>
+itself; nothing here leaves your machine.</p>
 <a class="go" href="http://molewire.local/">Open the portal</a>
 <p><a class="alt" href="http://172.31.255.1/">unprovisioned fallback
 (172.31.255.1)</a></p>
@@ -57,7 +60,7 @@ serial console on the first CDC port speaks the same protocol
     const j = await r.json();
     const el = document.getElementById("live");
     el.className = "ok";
-    el.textContent = `dongle found — ${j.version}, wifi ${
+    el.textContent = `dongle found: ${j.version}, wifi ${
       j.wifi.link ? "associated" : "associating"}, tunnel ${j.wg.state}`;
   } catch (e) { /* no LNA / no permission / no dongle: the link above still works */ }
 })();

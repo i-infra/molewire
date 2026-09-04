@@ -197,20 +197,20 @@ $("version").textContent=j.version;
 pill($("tunnel"),j.wg.state,
 j.wg.state==="up"?"ok":j.provisioned?"warn":"bad");
 $("wifi").textContent=j.wifi.ssid?
-`${j.wifi.ssid} — ${j.wifi.link?"associated ("+j.wifi.ip+")":j.wifi.state+"…"}`:
+`${j.wifi.ssid}: ${j.wifi.link?"associated ("+j.wifi.ip+")":j.wifi.state+"…"}`:
 (j.wifi.profiles&&j.wifi.profiles.length?j.wifi.state+"…":"not configured");
 renderProfiles(j.wifi.profiles||[]);
 $("wg").textContent=j.provisioned?
-`${j.wg.state} — ${j.wg.endpoint}:${j.wg.port}, ${j.wg.addr}/${j.wg.prefix}`+
+`${j.wg.state}: ${j.wg.endpoint}:${j.wg.port}, ${j.wg.addr}/${j.wg.prefix}`+
 (j.wg.routes.length?` (split: ${j.wg.routes.join(", ")})`:" (gateway mode)"):
-"not provisioned — fill in the forms below";
+"not provisioned; fill in the forms below";
 $("lease").textContent=j.leased?"active ("+j.wg.hostip+")":"waiting for host DHCP";
 $("usb").textContent=`in ${j.usb.from_host}  out ${j.usb.to_host}`+
 (j.usb.txdrop?`  drop ${j.usb.txdrop}`:"");
 $("uptime").textContent=fmtUp(j.uptime_s);
-$("pubkey").textContent=j.wg.pubkey||"(no key — generate one)";
+$("pubkey").textContent=j.wg.pubkey||"(no key; generate one)";
 $("apstate").textContent=j.ap.enabled?
-`on — ${j.ap.ssid}, ${j.ap.addr}/${j.ap.prefix} → ${j.ap.client}; client: `+
+`on: ${j.ap.ssid}, ${j.ap.addr}/${j.ap.prefix} → ${j.ap.client}; client: `+
 (j.ap.stas?("associated"+(j.ap.leased?", leased":"")):"none"):
 "off";
 if(!filled){filled=true;
@@ -244,7 +244,7 @@ headers:{"Content-Type":"text/plain"},body:line});
 const t=await r.text();
 log(t.trim()||"(ok)");filled=false;poll();
 return t;
-}catch(e){log("(no reply — device re-addressing or rebooting; reconnecting…)");
+}catch(e){log("(no reply: device re-addressing or rebooting; reconnecting…)");
 return""}
 }
 
@@ -257,7 +257,7 @@ $("cmdline").addEventListener("keydown",e=>{if(e.key==="Enter")$("send").onclick
 $("copykey").onclick=async()=>{
 try{await navigator.clipboard.writeText($("pubkey").textContent);
 $("copykey").textContent="copied";setTimeout(()=>$("copykey").textContent="copy",1200)}
-catch(e){log("clipboard unavailable — select the key text manually")}};
+catch(e){log("clipboard unavailable; select the key text manually")}};
 
 $("genkey").onclick=async()=>{
 const t=await cmd("genkey");
@@ -285,7 +285,7 @@ return ["",""]}
 function renderProfiles(ps){
 const el=$("proflist");
 el.innerHTML=ps.length?"":'<p style="color:var(--dim);font-size:.85rem;margin:0">'+
-"No saved networks yet — scan and pick one.</p>";
+"No saved networks yet; scan and pick one.</p>";
 ps.forEach(p=>{
 const [note,cls]=profNote(p);
 const row=document.createElement("div");row.className="net";
