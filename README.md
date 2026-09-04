@@ -1,4 +1,9 @@
-# molewire
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/logo-dark.png">
+    <img src="docs/logo.png" alt="molewire" width="340">
+  </picture>
+</p>
 
 A USB WireGuard adapter for the Raspberry Pi Pico 2 W (RP2350).
 
