@@ -19,9 +19,10 @@ forwarding).
 2. Hold the BOOTSEL button while plugging it into your computer, then copy
    `molewire.uf2` from the [latest release](https://github.com/i-infra/molewire/releases/latest)
    onto the `RP2350` drive that appears.
-3. Eject, unplug, replug. Browse to **http://molewire.local**: pick your
-   Wi-Fi, *generate keypair*, give the public key to your WireGuard admin,
-   enter the address pair + endpoint they hand back, *apply*, *save*.
+3. Eject, unplug, replug. Browse to **https://i-infra.github.io/molewire/**
+   — it opens the dongle's config portal: pick your Wi-Fi, *generate
+   keypair*, give the public key to your WireGuard admin, enter the address
+   pair + endpoint they hand back, *apply*, *save*.
 
 ## How it works
 
