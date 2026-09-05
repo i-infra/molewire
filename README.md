@@ -8,6 +8,11 @@
 <p align="center"><em>It looks like a flash drive. The computer thinks it's a network cable.<br>
 The computer can't see the Wi-Fi network, and the network sees nothing but encrypted traffic.</em></p>
 
+<!-- PHOTO SLOT: when docs/photo.jpg exists, replace this comment with:
+<p align="center"><img src="docs/photo.jpg" alt="A Pico 2 W next to a USB flash drive" width="560"></p>
+Best shot: the dongle beside an actual flash drive (proves the hook), or plugged into a laptop port.
+-->
+
 A USB WireGuard adapter for the Raspberry Pi Pico 2 W (RP2350). Plug it into
 any computer and it shows up as a standard USB network interface (CDC-NCM, with
 in-box drivers on Linux, macOS, Windows 10/11). The Pico joins an upstream
