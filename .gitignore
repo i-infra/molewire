@@ -11,3 +11,4 @@ tests/*.dSYM/
 __pycache__/
 # local-only provisioning (private infra details)
 tools/provision-tailguard.py
+notes/
