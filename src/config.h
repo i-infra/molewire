@@ -53,7 +53,14 @@ typedef struct {
   uint16_t keepalive;   // persistent-keepalive seconds, 0 = off
   uint16_t host_mtu;    // MTU handed to the host via DHCP; 0 = the WG MTU (1420).
                         // Set 1280 when the far side bridges into Tailscale.
-  uint16_t _pad0;       // keep the u32 fields below aligned
+  // Exit mode: forward overlay peers' decrypted traffic out the Wi-Fi station
+  // uplink (NAT at the station edge; see napt.h). Reachability is over the
+  // tunnel itself: peers route to this device via the server, so the device
+  // stays a pure initiator. These two bytes were padding, so records saved by
+  // older firmware read back as 0 = off.
+  uint8_t exit_enabled; // 1 = act as an exit node for tunnel traffic
+  uint8_t exit_lan;     // 1 = exit traffic may also reach the local LAN
+                        //     (private address space); 0 = internet only
   uint32_t addr;        // this device's tunnel address (USB-side gateway)
   uint32_t host_addr;   // the address DHCP leases to the USB host
   uint32_t dns;         // resolver handed to the host (0 = offer none)

@@ -171,8 +171,10 @@ static uint16_t status_json(char *o, uint16_t cap) {
   n += (uint16_t)json_str(o + n, cap - n, w->endpoint); // bounded by cap
   JADD(o, n, cap,
        ",\"port\":%u,\"addr\":\"%s\",\"prefix\":%u,\"hostip\":\"%s\","
-       "\"dns\":\"%s\",\"mtu\":%u,\"keepalive\":%u,\"routes\":[",
-       w->endpoint_port, ip, w->prefix, hostip, dns, w->host_mtu, w->keepalive);
+       "\"dns\":\"%s\",\"mtu\":%u,\"keepalive\":%u,"
+       "\"exit\":%s,\"exitlan\":%s,\"routes\":[",
+       w->endpoint_port, ip, w->prefix, hostip, dns, w->host_mtu, w->keepalive,
+       w->exit_enabled ? "true" : "false", w->exit_lan ? "true" : "false");
   for (uint8_t i = 0; i < w->route_count; i++) {
     char net[20];
     fmt_ip4_or_empty(net, sizeof(net), w->routes[i].net);

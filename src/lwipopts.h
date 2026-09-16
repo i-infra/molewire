@@ -85,6 +85,14 @@ struct netif;
 struct netif *wg_ip4_route_hook(const struct ip4_addr *src, const struct ip4_addr *dest);
 #define LWIP_HOOK_IP4_ROUTE_SRC(src, dest) wg_ip4_route_hook((src), (dest))
 
+// Exit mode's inbound NAT rewrite (wg.c): runs at the top of ip4_input, where
+// a station packet that matches a NAT mapping gets its destination rewritten
+// back to the overlay host so the normal forward path carries it into the
+// tunnel. Returns 0 always (nothing is consumed).
+struct pbuf;
+int wg_ip4_input_hook(struct pbuf *p, struct netif *inp);
+#define LWIP_HOOK_IP4_INPUT(p, inp) wg_ip4_input_hook((p), (inp))
+
 // A tunnel MTU of 1420 with a 1500-byte USB link means occasional oversize
 // forwards: fragment DF=0, ICMP frag-needed for DF=1 (the DHCP-advertised host
 // MTU makes both rare).

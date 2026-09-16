@@ -22,6 +22,7 @@
 #include "crypto/refc/chacha20.h"
 #include "crypto/refc/chacha20poly1305.h"
 #include "crypto/refc/poly1305-donna.h"
+#include "napt.h"
 #include "wifi_pick.h"
 #include "wireguard.h"
 
@@ -521,6 +522,261 @@ static void test_wifi_pick(void) {
         "pick: nojoin still tried");
 }
 
+
+// --- exit-mode NAT (napt.c) ---------------------------------------------------
+//
+// The NAT core is pure C over flat buffers, so it is exercised here with
+// hand-built packets. Checksums are verified by full recomputation with an
+// independent implementation: after any rewrite, the packet must still
+// checksum to zero the way a receiver would compute it.
+
+static uint16_t csum16(uint32_t sum, const uint8_t *d, size_t n) {
+  while (n > 1) {
+    sum += ((uint32_t)d[0] << 8) | d[1];
+    d += 2;
+    n -= 2;
+  }
+  if (n) {
+    sum += (uint32_t)d[0] << 8;
+  }
+  while (sum >> 16) {
+    sum = (sum & 0xFFFF) + (sum >> 16);
+  }
+  return (uint16_t)~sum;
+}
+
+// Build an IPv4 packet: 20-byte header, no options. l4 payload appended.
+static uint16_t mk_ip(uint8_t *o, uint8_t proto, uint32_t src, uint32_t dst,
+                      const uint8_t *l4, uint16_t l4len) {
+  uint16_t tot = (uint16_t)(20 + l4len);
+  memset(o, 0, 20);
+  o[0] = 0x45;
+  o[2] = (uint8_t)(tot >> 8);
+  o[3] = (uint8_t)tot;
+  o[8] = 64;
+  o[9] = proto;
+  o[12] = (uint8_t)(src >> 24); o[13] = (uint8_t)(src >> 16);
+  o[14] = (uint8_t)(src >> 8);  o[15] = (uint8_t)src;
+  o[16] = (uint8_t)(dst >> 24); o[17] = (uint8_t)(dst >> 16);
+  o[18] = (uint8_t)(dst >> 8);  o[19] = (uint8_t)dst;
+  uint16_t c = csum16(0, o, 20);
+  o[10] = (uint8_t)(c >> 8);
+  o[11] = (uint8_t)c;
+  memcpy(o + 20, l4, l4len);
+  return tot;
+}
+
+// Compute and store the L4 checksum (TCP/UDP pseudo header, or plain ICMP).
+static void fix_l4_csum(uint8_t *pkt) {
+  uint8_t proto = pkt[9];
+  uint16_t tot = (uint16_t)(((uint16_t)pkt[2] << 8) | pkt[3]);
+  uint8_t *l4 = pkt + 20;
+  uint16_t l4len = (uint16_t)(tot - 20);
+  int coff = proto == 6 ? 16 : proto == 17 ? 6 : 2;
+  l4[coff] = l4[coff + 1] = 0;
+  uint32_t sum = 0;
+  if (proto != 1) {
+    const uint8_t *a = pkt + 12;
+    for (int i = 0; i < 8; i += 2) sum += ((uint32_t)a[i] << 8) | a[i + 1];
+    sum += proto;
+    sum += l4len;
+  }
+  uint16_t c = csum16(sum, l4, l4len);
+  l4[coff] = (uint8_t)(c >> 8);
+  l4[coff + 1] = (uint8_t)c;
+}
+
+// A receiver's verdict: 0 == valid, for both the IP header and L4 checksums.
+static bool pkt_csums_ok(const uint8_t *pkt) {
+  if (csum16(0, pkt, 20) != 0) return false;
+  uint8_t proto = pkt[9];
+  uint16_t tot = (uint16_t)(((uint16_t)pkt[2] << 8) | pkt[3]);
+  const uint8_t *l4 = pkt + 20;
+  uint16_t l4len = (uint16_t)(tot - 20);
+  if (proto == 17 && l4[6] == 0 && l4[7] == 0) return true; // no checksum
+  uint32_t sum = 0;
+  if (proto != 1) {
+    const uint8_t *a = pkt + 12;
+    for (int i = 0; i < 8; i += 2) sum += ((uint32_t)a[i] << 8) | a[i + 1];
+    sum += proto;
+    sum += l4len;
+  }
+  return csum16(sum, l4, l4len) == 0;
+}
+
+#define EXT_IP 0xC0A80142u   // 192.168.1.66: the station address
+#define INNER_A 0x0A420007u  // 10.66.0.7: an overlay client
+#define REMOTE 0x08080808u   // an internet host
+
+static uint16_t rd16(const uint8_t *p) { return (uint16_t)(((uint16_t)p[0] << 8) | p[1]); }
+
+static void test_napt(void) {
+  uint8_t pkt[128], l4[64];
+  napt_reset();
+  napt_set_mss_clamp(0);
+  {
+    uint32_t be;
+    uint8_t b[4] = {0xC0, 0xA8, 0x01, 0x42};
+    memcpy(&be, b, 4); // network byte order, as lwIP hands it over
+    napt_set_ext_ip(be);
+  }
+
+  // UDP outbound: source rewritten to the station address, a NAT port in
+  // range, checksums still valid; the mapping is stable across packets.
+  memset(l4, 0, 8);
+  l4[0] = 0xC3; l4[1] = 0x50; // sport 50000
+  l4[2] = 0x00; l4[3] = 0x35; // dport 53
+  l4[4] = 0; l4[5] = 8;
+  uint16_t tot = mk_ip(pkt, 17, INNER_A, REMOTE, l4, 8);
+  fix_l4_csum(pkt);
+  check(napt_outbound(pkt, tot, 1000), "napt: udp outbound translates");
+  check(rd16(pkt + 12) == 0xC0A8 && rd16(pkt + 14) == 0x0142, "napt: udp src is ext ip");
+  uint16_t nat1 = rd16(pkt + 20);
+  check(nat1 >= NAPT_PORT_BASE && nat1 < NAPT_PORT_BASE + NAPT_MAX, "napt: port in range");
+  check(pkt_csums_ok(pkt), "napt: udp outbound checksums valid");
+
+  tot = mk_ip(pkt, 17, INNER_A, REMOTE, l4, 8);
+  fix_l4_csum(pkt);
+  check(napt_outbound(pkt, tot, 2000) && rd16(pkt + 20) == nat1,
+        "napt: same flow keeps its mapping");
+
+  // A second flow gets a different port.
+  l4[0] = 0xC3; l4[1] = 0x51; // sport 50001
+  tot = mk_ip(pkt, 17, INNER_A, REMOTE, l4, 8);
+  fix_l4_csum(pkt);
+  check(napt_outbound(pkt, tot, 2000) && rd16(pkt + 20) != nat1,
+        "napt: second flow gets its own port");
+
+  // UDP inbound reply: destination rewritten back to the inner host.
+  memset(l4, 0, 8);
+  l4[0] = 0x00; l4[1] = 0x35;
+  l4[2] = (uint8_t)(nat1 >> 8); l4[3] = (uint8_t)nat1;
+  l4[4] = 0; l4[5] = 8;
+  tot = mk_ip(pkt, 17, REMOTE, EXT_IP, l4, 8);
+  fix_l4_csum(pkt);
+  check(napt_inbound(pkt, tot, 3000), "napt: udp inbound matches");
+  check(rd16(pkt + 16) == 0x0A42 && rd16(pkt + 18) == 0x0007 && rd16(pkt + 22) == 50000,
+        "napt: udp inbound rewritten to inner host");
+  check(pkt_csums_ok(pkt), "napt: udp inbound checksums valid");
+
+  // Inbound to an unmapped port is left for local delivery.
+  l4[2] = 0xCA; l4[3] = 0x6C; // 51820: the WireGuard outer
+  tot = mk_ip(pkt, 17, REMOTE, EXT_IP, l4, 8);
+  fix_l4_csum(pkt);
+  uint8_t before[128];
+  memcpy(before, pkt, tot);
+  check(!napt_inbound(pkt, tot, 3000) && memcmp(before, pkt, tot) == 0,
+        "napt: unmapped inbound untouched");
+
+  // The UDP mapping expires after idle; the old port then stops matching.
+  memset(l4, 0, 8);
+  l4[0] = 0x00; l4[1] = 0x35;
+  l4[2] = (uint8_t)(nat1 >> 8); l4[3] = (uint8_t)nat1;
+  l4[4] = 0; l4[5] = 8;
+  tot = mk_ip(pkt, 17, REMOTE, EXT_IP, l4, 8);
+  fix_l4_csum(pkt);
+  check(!napt_inbound(pkt, tot, 2000 + 121000), "napt: udp mapping expires");
+
+  // TCP SYN outbound with MSS clamp: option rewritten, checksums valid, and
+  // an ACK later promotes the flow to the long-lived timeout.
+  napt_set_mss_clamp(1380);
+  memset(l4, 0, 24);
+  l4[0] = 0x80; l4[1] = 0x00; // sport 32768
+  l4[3] = 0x50;               // dport 80
+  l4[12] = 0x60;              // data offset 24: one option word
+  l4[13] = 0x02;              // SYN
+  l4[20] = 2; l4[21] = 4; l4[22] = 0x05; l4[23] = 0xB4; // MSS 1460
+  tot = mk_ip(pkt, 6, INNER_A, REMOTE, l4, 24);
+  fix_l4_csum(pkt);
+  check(napt_outbound(pkt, tot, 5000), "napt: tcp syn translates");
+  uint16_t tnat = rd16(pkt + 20);
+  check(rd16(pkt + 20 + 22) == 1380, "napt: mss clamped");
+  check(pkt_csums_ok(pkt), "napt: tcp syn checksums valid");
+
+  memset(l4, 0, 20);
+  l4[0] = 0x80; l4[1] = 0x00;
+  l4[3] = 0x50;
+  l4[12] = 0x50;
+  l4[13] = 0x10; // ACK
+  tot = mk_ip(pkt, 6, INNER_A, REMOTE, l4, 20);
+  fix_l4_csum(pkt);
+  check(napt_outbound(pkt, tot, 6000) && rd16(pkt + 20) == tnat,
+        "napt: tcp ack keeps mapping");
+  // Established flows survive an hour of silence...
+  memset(l4, 0, 20);
+  l4[0] = 0x00; l4[1] = 0x50;
+  l4[2] = (uint8_t)(tnat >> 8); l4[3] = (uint8_t)tnat;
+  l4[12] = 0x50;
+  l4[13] = 0x10;
+  tot = mk_ip(pkt, 6, REMOTE, EXT_IP, l4, 20);
+  fix_l4_csum(pkt);
+  check(napt_inbound(pkt, tot, 6000 + 3600000), "napt: established tcp survives idle");
+  check(rd16(pkt + 16) == 0x0A42 && rd16(pkt + 18) == 0x0007 && rd16(pkt + 22) == 32768,
+        "napt: tcp inbound rewritten to inner host");
+  check(pkt_csums_ok(pkt), "napt: tcp inbound checksums valid");
+  // ...but an RST moves the flow to the short closing timeout.
+  l4[13] = 0x14; // RST+ACK
+  tot = mk_ip(pkt, 6, REMOTE, EXT_IP, l4, 20);
+  fix_l4_csum(pkt);
+  uint32_t trst = 6000 + 3600000 + 1000;
+  check(napt_inbound(pkt, tot, trst), "napt: rst still matches");
+  tot = mk_ip(pkt, 6, REMOTE, EXT_IP, l4, 20);
+  fix_l4_csum(pkt);
+  check(!napt_inbound(pkt, tot, trst + 31000), "napt: closed tcp expires fast");
+
+  // ICMP echo: the id is the mapped field, both directions.
+  memset(l4, 0, 12);
+  l4[0] = 8;                  // echo request
+  l4[4] = 0x12; l4[5] = 0x34; // id
+  l4[6] = 0x00; l4[7] = 0x01; // seq
+  tot = mk_ip(pkt, 1, INNER_A, REMOTE, l4, 12);
+  fix_l4_csum(pkt);
+  check(napt_outbound(pkt, tot, 7000), "napt: icmp echo translates");
+  uint16_t inat = rd16(pkt + 24);
+  check(inat >= NAPT_PORT_BASE && pkt_csums_ok(pkt), "napt: icmp outbound valid");
+  memset(l4, 0, 12);
+  l4[0] = 0; // echo reply
+  l4[4] = (uint8_t)(inat >> 8); l4[5] = (uint8_t)inat;
+  l4[6] = 0x00; l4[7] = 0x01;
+  tot = mk_ip(pkt, 1, REMOTE, EXT_IP, l4, 12);
+  fix_l4_csum(pkt);
+  check(napt_inbound(pkt, tot, 7500), "napt: icmp reply matches");
+  check(rd16(pkt + 24) == 0x1234 && pkt_csums_ok(pkt), "napt: icmp id restored");
+
+  // Fragments are refused whole (outbound dropped, inbound left alone).
+  memset(l4, 0, 8);
+  l4[1] = 0xFF; l4[3] = 0xFF;
+  l4[5] = 8;
+  tot = mk_ip(pkt, 17, INNER_A, REMOTE, l4, 8);
+  pkt[6] = 0x20; // MF
+  pkt[10] = pkt[11] = 0;
+  uint16_t c = csum16(0, pkt, 20);
+  pkt[10] = (uint8_t)(c >> 8); pkt[11] = (uint8_t)c;
+  fix_l4_csum(pkt);
+  check(!napt_outbound(pkt, tot, 8000), "napt: fragment refused");
+
+  // A zero UDP checksum ("none") stays zero through translation.
+  memset(l4, 0, 8);
+  l4[0] = 0xC3; l4[1] = 0x52;
+  l4[3] = 0x35;
+  l4[5] = 8;
+  tot = mk_ip(pkt, 17, INNER_A, REMOTE, l4, 8);
+  check(napt_outbound(pkt, tot, 9000), "napt: udp no-checksum translates");
+  check(pkt[26] == 0 && pkt[27] == 0, "napt: udp no-checksum stays zero");
+
+  // Unsupported protocol outbound is refused (never sent untranslated).
+  memset(l4, 0, 8);
+  tot = mk_ip(pkt, 47, INNER_A, REMOTE, l4, 8); // GRE
+  check(!napt_outbound(pkt, tot, 9500), "napt: unsupported proto refused");
+
+  uint16_t entries; uint32_t drops;
+  napt_stats(&entries, &drops);
+  check(entries >= 4 && drops >= 2, "napt: stats count mappings and drops");
+  napt_reset();
+  napt_stats(&entries, &drops);
+  check(entries == 0, "napt: reset clears the table");
+}
+
 int main(void) {
   test_anchors();
   test_blake2s();
@@ -530,6 +786,7 @@ int main(void) {
   test_base64();
   test_handshake();
   test_wifi_pick();
+  test_napt();
 
   printf("\n%d passed, %d failed\n", g_pass, g_fail);
   return g_fail ? 1 : 0;

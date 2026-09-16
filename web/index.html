@@ -131,6 +131,16 @@ placeholder="25"></div>
 </div>
 <label for="f_routes">Split-tunnel routes (comma CIDRs, or off for full gateway)</label>
 <input id="f_routes" class="mono" placeholder="10.66.0.0/24,100.64.0.0/10">
+<label style="display:block;margin-top:.6rem"><input type="checkbox" id="f_exit">
+act as an exit node: peers on the WireGuard network can route their internet
+traffic out through this dongle</label>
+<label style="display:block;margin-top:.3rem"><input type="checkbox" id="f_exitlan">
+allow exit traffic to reach the local LAN (off = internet only)</label>
+<p style="color:var(--dim);font-size:.8rem;margin:.4rem 0 .2rem">
+Exit peers reach the dongle over the tunnel itself (routed via the server), so
+nothing listens on the local network; their traffic leaves NATed to the
+dongle&rsquo;s WiFi address. Same radio carries both directions: expect roughly
+half the usual throughput.</p>
 <div class="actions">
 <button id="apply" class="primary">apply</button>
 <button id="save">save to flash</button>
@@ -202,7 +212,8 @@ $("wifi").textContent=j.wifi.ssid?
 renderProfiles(j.wifi.profiles||[]);
 $("wg").textContent=j.provisioned?
 `${j.wg.state}: ${j.wg.endpoint}:${j.wg.port}, ${j.wg.addr}/${j.wg.prefix}`+
-(j.wg.routes.length?` (split: ${j.wg.routes.join(", ")})`:" (gateway mode)"):
+(j.wg.routes.length?` (split: ${j.wg.routes.join(", ")})`:" (gateway mode)")+
+(j.wg.exit?j.wg.exitlan?", exit node (LAN reachable)":", exit node":""):
 "not provisioned; fill in the forms below";
 $("lease").textContent=j.leased?"active ("+j.wg.hostip+")":"waiting for host DHCP";
 $("usb").textContent=`in ${j.usb.from_host}  out ${j.usb.to_host}`+
@@ -222,6 +233,8 @@ $("f_dns").value=j.wg.dns||"";
 $("f_mtu").value=j.wg.mtu||"";
 $("f_ka").value=j.wg.keepalive||"";
 $("f_routes").value=j.wg.routes.join(",");
+$("f_exit").checked=!!j.wg.exit;
+$("f_exitlan").checked=!!j.wg.exitlan;
 $("f_apssid").value=j.ap.ssid||"";
 $("f_apaddr").value=j.ap.addr?j.ap.addr+"/"+j.ap.prefix:"";
 $("f_apclient").value=j.ap.client||"";}
@@ -359,6 +372,8 @@ if(v("f_dns"))L.push("set dns "+v("f_dns"));
 if(v("f_mtu"))L.push("set mtu "+v("f_mtu"));
 if(v("f_ka"))L.push("set keepalive "+v("f_ka"));
 if(v("f_routes"))L.push("set routes "+v("f_routes"));
+L.push("set exit "+($("f_exit").checked?"on":"off"));
+L.push("set exitlan "+($("f_exitlan").checked?"on":"off"));
 if(!L.length){log("(nothing to apply)");return}
 cmds(L)};
 

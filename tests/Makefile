@@ -11,6 +11,7 @@ CFLAGS := -O1 -g -Wall -Wextra -Wno-unused-parameter \
           -I$(WG) -I$(SRC) -Ifake_lwip
 
 SRCS := test_main.c \
+        $(SRC)/napt.c \
         $(SRC)/wifi_pick.c \
         $(WG)/wireguard.c \
         $(WG)/crypto.c \

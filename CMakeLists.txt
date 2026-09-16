@@ -42,6 +42,7 @@ add_executable(molewire
     src/dhcp_server.c
     src/ap.c
     src/wg.c
+    src/napt.c
     src/http_portal.c
     src/pcap.c
     src/serial_bridge.c

@@ -17,6 +17,7 @@
 #include "config.h"
 #include "config_proto.h"
 #include "dhcp_server.h"
+#include "napt.h" // NAT stats for the dump
 #include "pcap.h"          // capture toggle + status for the dump
 #include "serial_bridge.h" // bridge status for the dump
 #include "wg.h"
@@ -220,6 +221,16 @@ void config_proto_dump(const cfg_io_t *io, const config_t *cfg) {
     }
   } else {
     out(io, "    mode:       gateway -- host default-routes through the tunnel\n");
+  }
+  if (w->exit_enabled) {
+    uint16_t nat_entries;
+    uint32_t nat_drops;
+    napt_stats(&nat_entries, &nat_drops);
+    snprintf(line, sizeof(line), "    exit:       on (%s)%s -- %u NAT mappings, %lu drops\n",
+             w->exit_lan ? "LAN reachable" : "internet only",
+             wg_exit_active() ? "" : " [inactive until the tunnel applies]",
+             nat_entries, (unsigned long)nat_drops);
+    out(io, line);
   }
   const ap_config_t *ap = &cfg->ap;
   if (ap->ssid[0] || ap->enabled) {
@@ -584,6 +595,30 @@ static int cmd_set(const cfg_io_t *io, char *args, config_t *cfg) {
     }
     cfg->wg.host_mtu = (uint16_t)m;
     return SET_WG;
+  } else if (strcasecmp(args, "exit") == 0) {
+    // Exit mode: forward overlay peers' traffic out the local Wi-Fi network,
+    // NATed to the station address. Peers reach this device over the tunnel
+    // itself (routed via the server), so nothing listens on the LAN.
+    if (strcasecmp(val, "on") == 0) {
+      cfg->wg.exit_enabled = 1;
+    } else if (strcasecmp(val, "off") == 0) {
+      cfg->wg.exit_enabled = 0;
+    } else {
+      out(io, "ERR usage: set exit <on|off>\n");
+      return SET_ERR;
+    }
+    return SET_WG;
+  } else if (strcasecmp(args, "exitlan") == 0) {
+    if (strcasecmp(val, "on") == 0) {
+      cfg->wg.exit_lan = 1;
+    } else if (strcasecmp(val, "off") == 0) {
+      cfg->wg.exit_lan = 0;
+    } else {
+      out(io, "ERR usage: set exitlan <on|off> (on = exit traffic may reach the\n"
+              "    local LAN's private addresses; off = internet only)\n");
+      return SET_ERR;
+    }
+    return SET_WG;
   } else if (strcasecmp(args, "apssid") == 0) {
     strncpy(cfg->ap.ssid, val, CONFIG_SSID_MAX - 1);
     cfg->ap.ssid[CONFIG_SSID_MAX - 1] = '\0';
@@ -641,7 +676,7 @@ static int cmd_set(const cfg_io_t *io, char *args, config_t *cfg) {
     return SET_AP;
   }
   out(io, "ERR unknown key (ssid|pass|country|debug|key|peer|psk|endpoint|addr|"
-          "hostip|dns|keepalive|mtu|routes|apssid|appass|apaddr|apclient|ap)\n");
+          "hostip|dns|keepalive|mtu|routes|exit|exitlan|apssid|appass|apaddr|apclient|ap)\n");
   return SET_ERR;
 }
 
@@ -792,7 +827,7 @@ static void handle_main(const cfg_io_t *io, char *cmd, char *args, config_t *cfg
     config_proto_dump(io, cfg);
   } else {
     out(io, "[!] commands: set <ssid|pass|country|debug|key|peer|psk|endpoint|addr|"
-            "hostip|dns|keepalive|mtu|routes|apssid|appass|apaddr|apclient|ap> <val> | "
+            "hostip|dns|keepalive|mtu|routes|exit|exitlan|apssid|appass|apaddr|apclient|ap> <val> | "
             "genkey [force] | pubkey | pcap <on|off|clear> | list | join <ssid> | "
             "use <n> | del <n> | scan | save | restore | reboot | bootsel\n");
   }

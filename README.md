@@ -139,6 +139,35 @@ untrusted IoT gadgets (`pcap on` watches what they do). Config: `set apssid`
 `set ap on`; the AP pair must also be inside the server's AllowedIPs. AP and
 station share one radio; expect ~half the USB path's throughput.
 
+## Exit mode
+
+The dongle can also work the other direction: `set exit on` and peers on the
+WireGuard network can route their internet traffic out through whatever WiFi
+network the dongle is sitting on. Drop it on any network you can join and the
+overlay gains an exit there.
+
+Reachability is over the tunnel itself: the dongle stays a pure initiator to
+its configured server (keepalives punch out through any NAT), peers connect
+to that same server, and the server routes their traffic to the dongle's
+tunnel address. Nothing listens on the local network and no port forwarding
+is needed; the server just needs the dongle's AllowedIPs to cover whatever
+the peers should exit through it (and `net.ipv4.ip_forward=1` if it is a
+plain Linux box).
+
+This is the one place the device does NAT: exit traffic leaves masqueraded to
+the dongle's WiFi address, because the local router has no route back to
+tunnel space. By default exit traffic may only reach the internet; private
+address space (the local LAN) is blackholed, so exit peers use the borrowed
+network without being able to roam it. `set exitlan on` lifts that when you
+want peers to reach a printer or NAS at the drop site. Every payload crosses
+the single radio twice (once encrypted, once plain), so expect roughly half
+the usual tunnel throughput. Known limits: TCP, UDP, and ping only (no GRE or
+ESP through the NAT), and fragmented datagrams are not translated; the MSS
+clamp keeps TCP clear of fragmentation in practice.
+
+Exit mode composes with the normal roles: the USB host and quarantine AP
+client keep their isolated tunnel paths while exit peers use the uplink.
+
 ## Serial party line
 
 The third CDC port, hardware **UART1 (GP4 TX / GP5 RX)**, and TCP port

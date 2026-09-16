@@ -5,6 +5,7 @@
 
 #include <hardware/flash.h>
 #include <lwip/dns.h>
+#include <lwip/ip.h> // ip_current_input_netif for the exit-mode route arm
 #include <lwip/ip4_addr.h>
 #include <lwip/netif.h>
 #include <lwip/sys.h>
@@ -15,6 +16,7 @@
 
 #include "ap.h"     // AP netif for the route hook's client isolation
 #include "crypto.h" // wireguard_x25519 for on-device keypair generation
+#include "napt.h"   // station-edge NAT for exit mode
 #include "usb_net.h"
 #include "wg.h"
 #include "wireguard-platform.h"
@@ -33,6 +35,14 @@ static struct netif *sta_netif;
 // so keep our own stable copy).
 static wg_config_t wgc;
 static bool wg_configured;
+
+// Exit mode (see napt.h): decrypted overlay traffic that is for neither the
+// USB host nor the AP client leaves via the station uplink, NATed to the
+// station address, instead of being blackholed. exit_lan_on additionally
+// permits private-space destinations (the local LAN); off = internet only.
+static bool exit_on;
+static bool exit_lan_on;
+static err_t (*orig_sta_output)(struct netif *, struct pbuf *, const ip4_addr_t *);
 
 static enum { WG_UNCONFIGURED, WG_RESOLVING, WG_HANDSHAKING, WG_UP } wg_state;
 static ip_addr_t endpoint_addr;
@@ -162,6 +172,24 @@ static bool in_ap_subnet(const ip4_addr_t *a) {
   return ip4_addr_net_eq(a, netif_ip4_addr(ap), netif_ip4_netmask(ap));
 }
 
+// True for destinations that stay on the local side of the uplink: private
+// space (RFC 1918), CGNAT space, link-local, loopback -- plus whatever subnet
+// the station actually sits on, in case the LAN runs on public addresses.
+// With exit_lan off, exit traffic to these is blackholed: the borrowed
+// network carries the peers' traffic but cannot be roamed by them.
+static bool dest_is_local_scope(const ip4_addr_t *d) {
+  uint32_t h = lwip_ntohl(ip4_addr_get_u32(d));
+  if ((h >> 24) == 10 || (h >> 24) == 127 ||
+      (h & 0xFFF00000u) == 0xAC100000u || // 172.16/12
+      (h & 0xFFFF0000u) == 0xC0A80000u || // 192.168/16
+      (h & 0xFFFF0000u) == 0xA9FE0000u || // 169.254/16
+      (h & 0xFFC00000u) == 0x64400000u) { // 100.64/10 (CGNAT)
+    return true;
+  }
+  return sta_netif && !ip4_addr_isany_val(*netif_ip4_addr(sta_netif)) &&
+         ip4_addr_net_eq(d, netif_ip4_addr(sta_netif), netif_ip4_netmask(sta_netif));
+}
+
 static bool is_own_addr(const ip4_addr_t *a) {
   struct netif *n;
   NETIF_FOREACH(n) {
@@ -194,11 +222,56 @@ struct netif *wg_ip4_route_hook(const struct ip4_addr *src, const struct ip4_add
     // Delivery toward the AP client -- unless it came from the USB host.
     return in_usb_subnet(src) ? &blackhole_netif : ap_active_netif();
   }
+  if (exit_on && wg_netif_added && ip_current_input_netif() == &wg_netif) {
+    // Exit mode: decrypted overlay traffic bound for neither client link
+    // leaves via the station uplink (NATed on the way out by
+    // exit_sta_output). Forwarded lookups only happen inside input
+    // processing, so the input netif is valid here and identifies the
+    // tunnel as the ingress.
+    if (!exit_lan_on && dest_is_local_scope(dest)) {
+      return &blackhole_netif; // internet only: the local LAN stays dark
+    }
+    return sta_netif ? sta_netif : &blackhole_netif;
+  }
   if (wg_netif_added) {
     return &wg_netif; // into the tunnel (drops until the session is up)
   }
   return &blackhole_netif;
 }
+
+// --- exit mode: NAT at the station edge -------------------------------------------
+
+// netif->output wrapper on the station. Locally-originated packets (a device
+// address, or 0.0.0.0 during DHCP) pass untouched; anything else reaching the
+// station output is exit-forwarded overlay traffic (the route hook sends
+// nothing else here) and is masqueraded in place. Untranslatable packets are
+// dropped, never sent with a tunnel-space source.
+static err_t exit_sta_output(struct netif *n, struct pbuf *p, const ip4_addr_t *addr) {
+  if (exit_on && p != NULL && p->len >= 20 && (((uint8_t *)p->payload)[0] >> 4) == 4) {
+    ip4_addr_t src;
+    memcpy(&src, (uint8_t *)p->payload + 12, 4);
+    if (!ip4_addr_isany_val(src) && !is_own_addr(&src)) {
+      if (!napt_outbound((uint8_t *)p->payload, p->len, wireguard_sys_now())) {
+        return ERR_OK; // no mapping possible: swallow the packet (fail closed)
+      }
+    }
+  }
+  return orig_sta_output(n, p, addr);
+}
+
+// LWIP_HOOK_IP4_INPUT. Runs on every inbound IPv4 packet before local-delivery
+// matching; only station packets in exit mode are examined. A NAT hit rewrites
+// the destination back to the inner overlay host in place and returns 0 -- the
+// packet then fails the is-it-for-us check and is forwarded, which the route
+// hook steers into the tunnel. A miss leaves the packet alone.
+int wg_ip4_input_hook(struct pbuf *p, struct netif *inp) {
+  if (exit_on && inp == sta_netif && p != NULL) {
+    napt_inbound((uint8_t *)p->payload, p->len, wireguard_sys_now());
+  }
+  return 0; // never consumed here
+}
+
+bool wg_exit_active(void) { return exit_on; }
 
 // --- tunnel lifecycle --------------------------------------------------------------
 
@@ -220,6 +293,9 @@ static void wg_teardown(void) {
   cyw43_arch_lwip_end();
   wg_state = WG_UNCONFIGURED;
   endpoint_resolved = false;
+  exit_on = false;
+  exit_lan_on = false;
+  napt_reset();
 }
 
 // Add the peer once the endpoint address is known, and start handshaking.
@@ -271,11 +347,27 @@ void wg_apply(const config_t *cfg, struct netif *sta) {
   sta_netif = sta;
   wg_teardown();
 
+  // Keep the station's IPv4 output wrapped (idempotently) so exit mode can be
+  // toggled by flag alone; with exit_on false the wrapper is a passthrough.
+  if (sta && sta->output != exit_sta_output) {
+    orig_sta_output = sta->output;
+    sta->output = exit_sta_output;
+  }
+
   wg_configured = config_wg_complete(cfg);
   if (!wg_configured) {
     return;
   }
   wgc = cfg->wg;
+
+  if (wgc.exit_enabled) {
+    exit_lan_on = wgc.exit_lan != 0;
+    uint16_t mtu = (wgc.host_mtu && wgc.host_mtu < WIREGUARDIF_MTU) ? wgc.host_mtu
+                                                                    : WIREGUARDIF_MTU;
+    napt_set_mss_clamp((uint16_t)(mtu - 40)); // exit TCP must fit the tunnel
+    napt_set_ext_ip(ip4_addr_get_u32(netif_ip4_addr(sta)));
+    exit_on = true; // last: the packet paths key off this
+  }
 
   // Endpoint: literal IPv4, or a hostname resolved once Wi-Fi is up.
   ip4_addr_t lit;
@@ -322,6 +414,11 @@ void wg_poll(void) {
   // Nothing to do until the station is associated (outer packets need Wi-Fi).
   if (!sta_netif || !netif_is_link_up(sta_netif)) {
     return;
+  }
+
+  if (exit_on) {
+    // The station address follows DHCP; keep the masquerade address current.
+    napt_set_ext_ip(ip4_addr_get_u32(netif_ip4_addr(sta_netif)));
   }
 
   if (wg_state == WG_RESOLVING) {

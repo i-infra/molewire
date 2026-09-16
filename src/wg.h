@@ -9,6 +9,11 @@
 // closed). The Pico's own traffic (DHCP client, DNS lookup of the endpoint,
 // and the tunnel's outer UDP, which is pinned to the station netif) routes
 // normally.
+//
+// Exit mode adds one more arm: decrypted overlay traffic that is for neither
+// client link may leave via the station uplink, NATed to the station address
+// (napt.h), with private-space destinations blackholed unless exit_lan is
+// set. The device stays a pure initiator; peers reach it over the tunnel.
 
 #ifndef WG_H
 #define WG_H
@@ -64,6 +69,15 @@ uint16_t wg_path_mtu(void);
 
 // lwIP LWIP_HOOK_IP4_ROUTE_SRC hook (referenced from lwip_hooks.h).
 struct netif *wg_ip4_route_hook(const struct ip4_addr *src, const struct ip4_addr *dest);
+
+// True while exit mode is live (enabled in the applied config, tunnel added).
+bool wg_exit_active(void);
+
+// lwIP LWIP_HOOK_IP4_INPUT hook (referenced from lwipopts.h): the inbound
+// half of the exit-mode NAT. Always returns 0 -- packets are rewritten in
+// place, never consumed.
+struct pbuf;
+int wg_ip4_input_hook(struct pbuf *p, struct netif *inp);
 
 #ifdef __cplusplus
 }
